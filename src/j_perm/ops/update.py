@@ -3,10 +3,10 @@ from __future__ import annotations
 import copy
 from typing import MutableMapping, Any, Mapping
 
-from src import register_op
-from utils.pointers import maybe_slice, jptr_ensure_parent
-from utils.special import resolve_special
-from utils.subst import substitute
+from ..registry import register_op
+from ..utils.pointers import maybe_slice, jptr_ensure_parent
+from ..utils.special import resolve_special
+from ..utils.subst import substitute
 
 
 @register_op("update")

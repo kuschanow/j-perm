@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import copy
 
-from src import register_op
-from utils.special import resolve_special
-from utils.subst import substitute
+from ..registry import register_op
+from ..utils.special import resolve_special
+from ..utils.subst import substitute
 
 
 @register_op("replace_root")

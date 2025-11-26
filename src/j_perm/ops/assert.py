@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import MutableMapping, Any, Mapping
 
-from src import register_op
-from utils.pointers import jptr_get
-from utils.subst import substitute
+from ..registry import register_op
+from ..utils.pointers import jptr_get
+from ..utils.subst import substitute
 
 
 @register_op("assert")

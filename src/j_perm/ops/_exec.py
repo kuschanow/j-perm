@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from typing import MutableMapping, Any, Mapping
 
-from src import register_op, apply_actions
-from utils.pointers import maybe_slice
-from utils.special import resolve_special
-from utils.subst import substitute
+from ..registry import register_op
+from ..engine import apply_actions
+from ..utils.pointers import maybe_slice
+from ..utils.special import resolve_special
+from ..utils.subst import substitute
 
 
 @register_op("exec")

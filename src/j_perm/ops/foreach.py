@@ -3,9 +3,10 @@ from __future__ import annotations
 import copy
 from typing import MutableMapping, Any, Mapping
 
-from src import register_op, normalize_actions, apply_actions
-from utils.pointers import maybe_slice
-from utils.subst import substitute
+from ..registry import register_op
+from ..engine import normalize_actions, apply_actions
+from ..utils.pointers import maybe_slice
+from ..utils.subst import substitute
 
 
 @register_op("foreach")
