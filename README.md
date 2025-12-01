@@ -30,7 +30,7 @@ built-in operations.
 ## Basic usage
 
 ```python
-from json_patch_applier import apply_actions
+from j_perm import apply_actions
 
 source = {
     "users": [
@@ -77,7 +77,7 @@ result = apply_actions(actions, dest={}, source=source)
 ## Schema generation
 
 ```python
-from json_patch_applier import build_schema
+from j_perm import build_schema
 
 schema = build_schema(script)
 ```
@@ -88,7 +88,7 @@ validation or introspection.
 ## Extending with custom operations
 
 ```python
-from json_patch_applier import register_op
+from j_perm import register_op
 
 @register_op("my_op")
 def my_op(step, dest, src):

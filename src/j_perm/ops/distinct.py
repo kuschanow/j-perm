@@ -20,11 +20,19 @@ def op_distinct(
     if not isinstance(lst, list):
         raise TypeError(f"{path} is not a list (distinct)")
 
+    key = step.get("key", None)
+    key_path = substitute(key, src)
+
     seen = set()
     unique = []
     for item in lst:
-        if item not in seen:
-            seen.add(item)
+        if key is not None:
+            filter_item = jptr_get(item, key_path)
+        else:
+            filter_item = item
+
+        if filter_item not in seen:
+            seen.add(filter_item)
             unique.append(item)
 
     lst[:] = unique
