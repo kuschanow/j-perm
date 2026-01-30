@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from jmespath import functions as _jp_funcs
 
-from j_perm.subst import JpFuncRegistry
+from ..subst import JpFuncRegistry
 
 
 @JpFuncRegistry.register("subtract")

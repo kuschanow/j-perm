@@ -1,4 +1,5 @@
 from ._assert import op_assert
+from ._assert_d import op_assert_d
 from ._exec import op_exec
 from ._if import op_if
 from .copy import op_copy

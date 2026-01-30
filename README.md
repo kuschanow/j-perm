@@ -71,11 +71,13 @@ Typical setup:
 substitutor = TemplateSubstitutor()
 special = SpecialResolver()
 handlers = Handlers()
+normalizer = Normalizer()
 
 engine = ActionEngine(
   handlers=handlers,
   special=special,
   substitutor=substitutor,
+  normalizer=normalizer,
 )
 ```
 
@@ -663,59 +665,103 @@ Update a mapping at `path` using either source mapping (`from`) or inline mappin
 
 ---
 
-## Shorthand expansion (built-in)
+## Shorthand normalization
 
-Normalization expands shorthand syntax into explicit operation steps:
+In addition to explicit DSL steps, J-Perm supports a *shorthand syntax* for more concise scripts.
+Shorthand forms are expanded into regular operation steps **before execution**.
 
-### `~delete`
+Shorthand expansion is implemented as a pluggable normalization layer, similar to operations and special constructs.
+
+### How it works
+
+During normalization, each mapping entry is processed by a chain of registered *shorthand rules*:
+
+1. Each rule decides whether it can handle a given `(key, value)` pair.
+2. If a rule matches, it expands the entry into one or more explicit operation steps.
+3. The first matching rule wins.
+4. If no rule matches, normalization fails with an error.
+
+The resulting list of steps is then executed by the engine as a normal DSL script.
+
+---
+
+### Built-in shorthand rules
+
+The following shorthand forms are enabled by default.
+
+#### Delete shorthand (`~delete`)
 
 ```json
 { "~delete": ["/a", "/b"] }
 ```
 
-→
+Expands into:
 
 ```json
 { "op": "delete", "path": "/a" }
 { "op": "delete", "path": "/b" }
 ```
 
-### `~assert`
+---
+
+#### Assert shorthand (`~assert`)
+
+Mapping form:
 
 ```json
-{ "~assert": { "/x": 10 } }
+{ "~assert": { "/x": 10, "/y": 20 } }
 ```
 
-→
+Expands into:
 
 ```json
 { "op": "assert", "path": "/x", "equals": 10 }
+{ "op": "assert", "path": "/y", "equals": 20 }
 ```
 
-### `field[]` append
+List / string form:
+
+```json
+{ "~assert": ["/x", "/y"] }
+```
+
+Expands into existence-only assertions.
+
+---
+
+#### Append shorthand (`field[]`)
+
+A key ending with `[]` means *append to a list* at that path:
 
 ```json
 { "items[]": 123 }
 ```
 
-→
+Expands into:
 
 ```json
 { "op": "set", "path": "/items/-", "value": 123 }
 ```
 
-### pointer assignment
+---
 
-If a value is a string that starts with `/`, it becomes a `copy`:
+#### Pointer assignment shorthand
+
+If a value is a string that starts with `/`, it is treated as a source pointer:
 
 ```json
 { "name": "/user/fullName" }
 ```
 
-→
+Expands into:
 
 ```json
-{ "op": "copy", "from": "/user/fullName", "path": "/name", "ignore_missing": true }
+{
+  "op": "copy",
+  "from": "/user/fullName",
+  "path": "/name",
+  "ignore_missing": true
+}
 ```
 
 ---
@@ -781,6 +827,21 @@ Usage:
 
 ```text
 ${json:/raw_payload}
+```
+
+---
+
+### Custom shorthand rules
+
+```python
+from j_perm import ShorthandRegistry, ExpandResult
+
+@ShorthandRegistry.register("name", priority=10)
+def my_shorthand_rule(key: str, value: Any) -> ExpandResult | None:
+    if key.startswith("my_prefix_"):
+        # expand into steps
+        steps = [ ... ]
+        return steps
 ```
 
 ---

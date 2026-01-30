@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Mapping, Any
 
-from j_perm.special_resolver import SpecialRegistry
+from ..special_resolver import SpecialRegistry
 
 
 @SpecialRegistry.register("$eval")

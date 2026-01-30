@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import MutableMapping, Any, Mapping
 
 from ..op_handler import OpRegistry
-from ..engine import apply_actions
 from ..utils.pointers import maybe_slice
 
 
@@ -43,10 +42,10 @@ def op_exec(
     merge = bool(step.get("merge", False))
 
     if merge:
-        result = apply_actions(actions, dest=dest, source=src)
+        result = engine.apply_actions(actions, dest=dest, source=src)
         return result
     else:
-        result = apply_actions(actions, dest={}, source=src)
+        result = engine.apply_actions(actions, dest={}, source=src)
         dest.clear()
         if isinstance(dest, list):
             dest.extend(result)  # type: ignore[arg-type]

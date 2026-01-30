@@ -3,8 +3,8 @@ from __future__ import annotations
 import copy
 from typing import Mapping, Any
 
-from j_perm.special_resolver import _MISSING, SpecialRegistry
-from j_perm.utils.pointers import maybe_slice
+from ..special_resolver import _MISSING, SpecialRegistry
+from ..utils.pointers import maybe_slice
 
 
 @SpecialRegistry.register("$ref")
