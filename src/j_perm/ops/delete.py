@@ -2,19 +2,19 @@ from __future__ import annotations
 
 from typing import MutableMapping, Any, Mapping
 
-from ..registry import register_op
+from ..op_handler import OpRegistry
 from ..utils.pointers import jptr_ensure_parent
-from ..utils.subst import substitute
 
 
-@register_op("delete")
+@OpRegistry.register("delete")
 def op_delete(
         step: dict,
         dest: MutableMapping[str, Any],
         src: Mapping[str, Any],
+        engine: "ActionEngine",
 ) -> MutableMapping[str, Any]:
     """Delete node at the given JSON Pointer path in dest."""
-    path = substitute(step["path"], src)
+    path = engine.substitutor.substitute(step["path"], src)
     ignore = bool(step.get("ignore_missing", True))
 
     try:

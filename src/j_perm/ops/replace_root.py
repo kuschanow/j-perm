@@ -2,15 +2,13 @@ from __future__ import annotations
 
 import copy
 
-from ..registry import register_op
-from ..utils.special import resolve_special
-from ..utils.subst import substitute
+from ..op_handler import OpRegistry
 
 
-@register_op("replace_root")
-def op_replace_root(step, dest, src):
+@OpRegistry.register("replace_root")
+def op_replace_root(step, dest, src, engine):
     """Replace the whole dest root value with the resolved special value."""
-    value = resolve_special(step["value"], src)
+    value = engine.special.resolve(step["value"], src, engine)
     if isinstance(value, (str, list, dict)):
-        value = substitute(value, src)
+        value = engine.substitutor.substitute(value, src)
     return copy.deepcopy(value)

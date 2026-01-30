@@ -2,26 +2,25 @@ from __future__ import annotations
 
 from typing import Any, Mapping, MutableMapping
 
-from ..registry import register_op
+from ..op_handler import OpRegistry
 from ..utils.pointers import jptr_ensure_parent
-from ..utils.special import resolve_special
-from ..utils.subst import substitute
 
 
-@register_op("set")
+@OpRegistry.register("set")
 def op_set(
         step: dict,
         dest: MutableMapping[str, Any],
         src: Mapping[str, Any],
+        engine: "ActionEngine",
 ) -> MutableMapping[str, Any]:
     """Set or append a value at JSON Pointer path in dest."""
-    path = substitute(step["path"], src)
+    path = engine.substitutor.substitute(step["path"], src)
     create = bool(step.get("create", True))
     extend_list = bool(step.get("extend", True))
 
-    value = resolve_special(step["value"], src)
+    value = engine.special.resolve(step["value"], src, engine)
     if isinstance(value, (str, list, Mapping)):
-        value = substitute(value, src)
+        value = engine.substitutor.substitute(value, src)
 
     parent, leaf = jptr_ensure_parent(dest, path, create=create)
 

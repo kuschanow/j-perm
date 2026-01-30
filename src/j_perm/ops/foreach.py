@@ -3,20 +3,19 @@ from __future__ import annotations
 import copy
 from typing import MutableMapping, Any, Mapping
 
-from ..registry import register_op
-from ..engine import normalize_actions, apply_actions
+from ..op_handler import OpRegistry
 from ..utils.pointers import maybe_slice
-from ..utils.subst import substitute
 
 
-@register_op("foreach")
+@OpRegistry.register("foreach")
 def op_foreach(
         step: dict,
         dest: MutableMapping[str, Any],
         src: Mapping[str, Any] | list,
+        engine: "ActionEngine",
 ) -> MutableMapping[str, Any]:
     """Iterate over array in source and execute nested actions for each element."""
-    arr_ptr = substitute(step["in"], src)
+    arr_ptr = engine.substitutor.substitute(step["in"], src)
 
     default = copy.deepcopy(step.get("default", []))
     skip_empty = bool(step.get("skip_empty", True))
@@ -33,7 +32,7 @@ def op_foreach(
         arr = list(arr.items())
 
     var = step.get("as", "item")
-    body = normalize_actions(step["do"])
+    body = engine.normalize_actions(step["do"])
     snapshot = copy.deepcopy(dest)
 
     try:
@@ -44,7 +43,7 @@ def op_foreach(
                 extended = {"_": src}
 
             extended[var] = elem
-            dest = apply_actions(body, dest=dest, source=extended)
+            dest = engine.apply_actions(body, dest=dest, source=extended)
     except Exception:
         dest.clear()
         if isinstance(dest, list):

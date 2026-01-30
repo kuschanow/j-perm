@@ -1,13 +1,21 @@
 # Import built-in operations so that they register on import.
+from . import casters as _builtin_casters  # noqa: F401
+from . import constructs as _builtin_constructs  # noqa: F401
+from . import funcs as _builtin_funcs  # noqa: F401
 from . import ops as _builtin_ops  # noqa: F401
-from .engine import apply_actions, normalize_actions
-from .registry import register_op, Handler
-from .schema import build_schema
+from .engine import apply_actions, ActionEngine
+from .subst import JpFuncRegistry, CasterRegistry, TemplateSubstitutor
+from .op_handler import OpRegistry, Handlers
+from .special_resolver import SpecialRegistry, SpecialResolver
 
 __all__ = [
-    "Handler",
-    "register_op",
     "apply_actions",
-    "normalize_actions",
-    "build_schema",
+    "ActionEngine",
+    "JpFuncRegistry",
+    "CasterRegistry",
+    "TemplateSubstitutor",
+    "OpRegistry",
+    "Handlers",
+    "SpecialRegistry",
+    "SpecialResolver",
 ]

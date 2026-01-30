@@ -2,26 +2,26 @@ from __future__ import annotations
 
 from typing import MutableMapping, Any, Mapping
 
-from ..registry import register_op
+from ..op_handler import OpRegistry
 from ..utils.pointers import jptr_get
-from ..utils.subst import substitute
 
 
-@register_op("distinct")
+@OpRegistry.register("distinct")
 def op_distinct(
         step: dict,
         dest: MutableMapping[str, Any],
         src: Mapping[str, Any],
+        engine: "ActionEngine",
 ) -> MutableMapping[str, Any]:
     """Remove duplicates from a list at the given path, preserving order."""
-    path = substitute(step["path"], src)
+    path = engine.substitutor.substitute(step["path"], src)
     lst = jptr_get(dest, path)
 
     if not isinstance(lst, list):
         raise TypeError(f"{path} is not a list (distinct)")
 
     key = step.get("key", None)
-    key_path = substitute(key, src)
+    key_path = engine.substitutor.substitute(key, src)
 
     seen = set()
     unique = []

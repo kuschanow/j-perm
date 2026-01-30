@@ -4,22 +4,22 @@ import copy
 from typing import MutableMapping, Any, Mapping
 
 from .set import op_set
-from ..registry import register_op
+from ..op_handler import OpRegistry
 from ..utils.pointers import maybe_slice
-from ..utils.subst import substitute
 
 
-@register_op("copyD")
+@OpRegistry.register("copyD")
 def op_copy_d(
         step: dict,
         dest: MutableMapping[str, Any],
         src: Mapping[str, Any],
+        engine: "ActionEngine",
 ) -> MutableMapping[str, Any]:
     """Copy value from dest (self) into another dest path."""
-    path = substitute(step["path"], src)
+    path = engine.substitutor.substitute(step["path"], src)
     create = bool(step.get("create", True))
 
-    ptr = substitute(step["from"], dest)
+    ptr = engine.substitutor.substitute(step["from"], dest)
     ignore = bool(step.get("ignore_missing", False))
 
     try:

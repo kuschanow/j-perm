@@ -2,19 +2,19 @@ from __future__ import annotations
 
 from typing import MutableMapping, Any, Mapping
 
-from ..registry import register_op
+from ..op_handler import OpRegistry
 from ..utils.pointers import jptr_get
-from ..utils.subst import substitute
 
 
-@register_op("assert")
+@OpRegistry.register("assert")
 def op_assert(
         step: dict,
         dest: MutableMapping[str, Any],
         src: Mapping[str, Any],
+        engine: "ActionEngine",
 ) -> MutableMapping[str, Any]:
     """Assert node existence and/or value at JSON Pointer path in dest."""
-    path = substitute(step["path"], src)
+    path = engine.substitutor.substitute(step["path"], src)
 
     try:
         current = jptr_get(dest, path)
