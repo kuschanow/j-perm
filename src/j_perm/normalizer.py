@@ -55,20 +55,20 @@ class ShorthandRegistry:
 
 @dataclass(slots=True)
 class Normalizer:
-    shorthand: list[str] | Mapping[str, Rule] | None = None
+    rules: list[str] | Mapping[str, Rule] | None = None
     priority: Mapping[str, int] | None = None
 
     _rules: list[Rule] = field(init=False)
 
     def __post_init__(self) -> None:
-        if self.shorthand is None:
+        if self.rules is None:
             rules = ShorthandRegistry.all()
-        elif isinstance(self.shorthand, Mapping):
-            rules = dict(self.shorthand)
+        elif isinstance(self.rules, Mapping):
+            rules = dict(self.rules)
         else:
             all_rules = ShorthandRegistry.all()
             rules = {}
-            for n in self.shorthand:
+            for n in self.rules:
                 if n not in all_rules:
                     raise ValueError(f"Unknown rule {n!r}")
                 rules[n] = all_rules[n]
