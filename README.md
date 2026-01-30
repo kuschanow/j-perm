@@ -69,7 +69,7 @@ Typical setup:
 
 ```python
 substitutor = TemplateSubstitutor()
-special = SpecialResolver(substitutor=substitutor)
+special = SpecialResolver()
 handlers = Handlers()
 
 engine = ActionEngine(
@@ -77,8 +77,6 @@ engine = ActionEngine(
   special=special,
   substitutor=substitutor,
 )
-
-result = engine.apply_actions(actions, dest={}, source=source)
 ```
 
 ### Signature
