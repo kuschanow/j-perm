@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import MutableMapping, Any, Mapping
 
 from ..op_handler import OpRegistry
-from ..utils.pointers import jptr_get
 
 
 @OpRegistry.register("assertD")
@@ -17,7 +16,7 @@ def op_assert_d(
     path = engine.substitutor.substitute(step["path"], dest)
 
     try:
-        current = jptr_get(dest, path)
+        current = engine.pointer_manager.get_pointer(dest, path)
     except Exception:
         raise AssertionError(f"'{path}' does not exist in destination")
 

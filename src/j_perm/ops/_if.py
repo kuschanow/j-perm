@@ -4,7 +4,6 @@ import copy
 from typing import MutableMapping, Any, Mapping
 
 from ..op_handler import OpRegistry
-from ..utils.pointers import maybe_slice
 
 
 @OpRegistry.register("if")
@@ -18,7 +17,7 @@ def op_if(
     if "path" in step:
         try:
             ptr = engine.substitutor.substitute(step["path"], src)
-            current = maybe_slice(ptr, dest)
+            current = engine.pointer_manager.maybe_slice(ptr, dest)
             missing = False
         except Exception:
             current = None

@@ -4,7 +4,6 @@ import copy
 from typing import MutableMapping, Any, Mapping
 
 from ..op_handler import OpRegistry
-from ..utils.pointers import maybe_slice, jptr_ensure_parent
 
 
 @OpRegistry.register("update")
@@ -22,7 +21,7 @@ def op_update(
     if "from" in step:
         ptr = engine.substitutor.substitute(step["from"], src)
         try:
-            update_value = copy.deepcopy(maybe_slice(ptr, src))
+            update_value = copy.deepcopy(engine.pointer_manager.maybe_slice(ptr, src))
         except Exception:
             if "default" in step:
                 update_value = copy.deepcopy(step["default"])

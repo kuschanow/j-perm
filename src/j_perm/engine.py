@@ -6,6 +6,7 @@ from typing import Any, List, Mapping, TypeAlias, MutableMapping, Union
 
 from .normalizer import Normalizer
 from .op_handler import Handlers
+from .pointers import PointerManager
 from .special_resolver import SpecialResolver
 from .subst import TemplateSubstitutor
 
@@ -48,6 +49,7 @@ class ActionEngine:
     special: SpecialResolver = field(default_factory=SpecialResolver)
     substitutor: TemplateSubstitutor = field(default_factory=TemplateSubstitutor)
     normalizer: Normalizer = field(default_factory=Normalizer)
+    pointer_manager: PointerManager = field(default_factory=PointerManager)
 
     def apply_actions(
             self,

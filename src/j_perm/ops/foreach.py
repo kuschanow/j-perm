@@ -4,7 +4,6 @@ import copy
 from typing import MutableMapping, Any, Mapping
 
 from ..op_handler import OpRegistry
-from ..utils.pointers import maybe_slice
 
 
 @OpRegistry.register("foreach")
@@ -21,7 +20,7 @@ def op_foreach(
     skip_empty = bool(step.get("skip_empty", True))
 
     try:
-        arr = maybe_slice(arr_ptr, src)
+        arr = engine.pointer_manager.maybe_slice(arr_ptr, src)
     except Exception:
         arr = default
 

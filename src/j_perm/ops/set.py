@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any, Mapping, MutableMapping
 
 from ..op_handler import OpRegistry
-from ..utils.pointers import jptr_ensure_parent
 
 
 @OpRegistry.register("set")
@@ -22,12 +21,12 @@ def op_set(
     if isinstance(value, (str, list, Mapping)):
         value = engine.substitutor.substitute(value, src)
 
-    parent, leaf = jptr_ensure_parent(dest, path, create=create)
+    parent, leaf = engine.pointer_manager.ensure_parent(dest, path, create=create)
 
     if leaf == "-":
         if not isinstance(parent, list):
             if create:
-                grand, last = jptr_ensure_parent(dest, path.rsplit("/", 1)[0], create=True)
+                grand, last = engine.pointer_manager.ensure_parent(dest, path.rsplit("/", 1)[0], create=True)
                 if not isinstance(grand[last], list):
                     if grand[last] == {}:
                         grand[last] = []

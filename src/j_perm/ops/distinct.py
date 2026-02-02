@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import MutableMapping, Any, Mapping
 
 from ..op_handler import OpRegistry
-from ..utils.pointers import jptr_get
 
 
 @OpRegistry.register("distinct")
@@ -15,7 +14,7 @@ def op_distinct(
 ) -> MutableMapping[str, Any]:
     """Remove duplicates from a list at the given path, preserving order."""
     path = engine.substitutor.substitute(step["path"], src)
-    lst = jptr_get(dest, path)
+    lst = engine.pointer_manager.get_pointer(dest, path)
 
     if not isinstance(lst, list):
         raise TypeError(f"{path} is not a list (distinct)")
@@ -27,7 +26,7 @@ def op_distinct(
     unique = []
     for item in lst:
         if key is not None:
-            filter_item = jptr_get(item, key_path)
+            filter_item = engine.pointer_manager.get_pointer(item, key_path)
         else:
             filter_item = item
 

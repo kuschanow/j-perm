@@ -19,6 +19,7 @@ class ShorthandRegistry:
             cls._rules[name] = fn
             cls._default_priority[name] = priority
             return fn
+
         return deco
 
     @classmethod

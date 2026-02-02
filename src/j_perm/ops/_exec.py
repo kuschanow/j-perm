@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import MutableMapping, Any, Mapping
 
 from ..op_handler import OpRegistry
-from ..utils.pointers import maybe_slice
 
 
 @OpRegistry.register("exec")
@@ -26,7 +25,7 @@ def op_exec(
     if has_from:
         actions_ptr = engine.substitutor.substitute(step["from"], src)
         try:
-            actions = maybe_slice(actions_ptr, src)
+            actions = engine.pointer_manager.maybe_slice(actions_ptr, src)
         except Exception:
             if "default" in step:
                 actions = engine.special.resolve(step["default"], src, engine)

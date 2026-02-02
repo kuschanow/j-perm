@@ -5,7 +5,6 @@ from typing import MutableMapping, Any, Mapping
 
 from .set import op_set
 from ..op_handler import OpRegistry
-from ..utils.pointers import maybe_slice
 
 
 @OpRegistry.register("copy")
@@ -24,7 +23,7 @@ def op_copy(
     ignore = bool(step.get("ignore_missing", False))
 
     try:
-        value = copy.deepcopy(maybe_slice(ptr, src))
+        value = copy.deepcopy(engine.pointer_manager.maybe_slice(ptr, src))
     except Exception:
         if "default" in step:
             value = copy.deepcopy(step["default"])

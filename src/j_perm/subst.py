@@ -8,8 +8,6 @@ from typing import Any, Callable, Mapping
 import jmespath
 from jmespath import functions as _jp_funcs
 
-from j_perm.utils.pointers import maybe_slice
-
 # =============================================================================
 # Types
 # =============================================================================
@@ -295,6 +293,6 @@ class TemplateSubstitutor:
         # 4) JSON Pointer fallback
         pointer = "/" + expr.lstrip("/")
         try:
-            return maybe_slice(pointer, data)  # type: ignore[arg-type]
+            return engine.pointer_manager.maybe_slice(pointer, data)  # type: ignore[arg-type]
         except Exception:
             return None
