@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "j-perm"
-version = "0.2.2"
+version = "0.2.4"
 description = "json permutation library"
 authors = [
     { name = "Roman", email = "kuschanow@gmail.com" },

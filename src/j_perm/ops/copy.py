@@ -15,11 +15,11 @@ def op_copy(
         engine: "ActionEngine",
 ) -> MutableMapping[str, Any]:
     """Copy value from source pointer into dest path."""
-    path = engine.substitutor.substitute(step["path"], src)
+    path = engine.substitutor.substitute(step["path"], src, engine)
     create = bool(step.get("create", True))
     extend_list = bool(step.get("extend", True))
 
-    ptr = engine.substitutor.substitute(step["from"], src)
+    ptr = engine.substitutor.substitute(step["from"], src, engine)
     ignore = bool(step.get("ignore_missing", False))
 
     try:
@@ -36,4 +36,5 @@ def op_copy(
         {"op": "set", "path": path, "value": value, "create": create, "extend": extend_list},
         dest,
         src,
+        engine
     )

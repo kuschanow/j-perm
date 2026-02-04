@@ -14,12 +14,12 @@ def op_update(
         engine: "ActionEngine",
 ) -> MutableMapping[str, Any]:
     """Update a mapping at the given path using a mapping from source or inline value."""
-    path = engine.substitutor.substitute(step["path"], src)
+    path = engine.substitutor.substitute(step["path"], src, engine)
     create = bool(step.get("create", True))
     deep = bool(step.get("deep", False))
 
     if "from" in step:
-        ptr = engine.substitutor.substitute(step["from"], src)
+        ptr = engine.substitutor.substitute(step["from"], src, engine)
         try:
             update_value = copy.deepcopy(engine.pointer_manager.maybe_slice(ptr, src))
         except Exception:
@@ -30,7 +30,7 @@ def op_update(
     elif "value" in step:
         update_value = engine.special.resolve(step["value"], src, engine)
         if isinstance(update_value, (str, list, Mapping)):
-            update_value = engine.substitutor.substitute(update_value, src)
+            update_value = engine.substitutor.substitute(update_value, src, engine)
     else:
         raise ValueError("update operation requires either 'from' or 'value' parameter")
 

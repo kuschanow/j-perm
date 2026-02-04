@@ -16,7 +16,7 @@ def op_if(
     """Conditionally execute nested actions based on a path or expression."""
     if "path" in step:
         try:
-            ptr = engine.substitutor.substitute(step["path"], src)
+            ptr = engine.substitutor.substitute(step["path"], src, engine)
             current = engine.pointer_manager.maybe_slice(ptr, dest)
             missing = False
         except Exception:
@@ -24,14 +24,14 @@ def op_if(
             missing = True
 
         if "equals" in step:
-            expected = engine.substitutor.substitute(step["equals"], src)
+            expected = engine.substitutor.substitute(step["equals"], src, engine)
             cond_val = current == expected and not missing
         elif step.get("exists"):
             cond_val = not missing
         else:
             cond_val = bool(current) and not missing
     else:
-        raw_cond = engine.substitutor.substitute(step.get("cond"), src)
+        raw_cond = engine.substitutor.substitute(step.get("cond"), src, engine)
         cond_val = bool(raw_cond)
 
     branch_key = "then" if cond_val else "else"

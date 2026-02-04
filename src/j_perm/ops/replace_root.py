@@ -10,5 +10,5 @@ def op_replace_root(step, dest, src, engine):
     """Replace the whole dest root value with the resolved special value."""
     value = engine.special.resolve(step["value"], src, engine)
     if isinstance(value, (str, list, dict)):
-        value = engine.substitutor.substitute(value, src)
+        value = engine.substitutor.substitute(value, src, engine)
     return copy.deepcopy(value)

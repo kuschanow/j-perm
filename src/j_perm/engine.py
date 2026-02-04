@@ -51,6 +51,8 @@ class ActionEngine:
     normalizer: Normalizer = field(default_factory=Normalizer)
     pointer_manager: PointerManager = field(default_factory=PointerManager)
 
+    max_depth: int = 50
+
     def apply_actions(
             self,
             actions: Any,
@@ -111,7 +113,7 @@ default_engine = ActionEngine()
 def apply_actions(
         actions: Any,
         *,
-        dest: JsonLikeDest,
+        dest: Dest,
         source: JsonLikeSource,
 ) -> Any:
     """Convenience function: apply a DSL script using the default engine."""

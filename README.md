@@ -786,8 +786,8 @@ def my_op(step, dest, src, engine):
 from j_perm import SpecialRegistry
 
 @SpecialRegistry.register("$upper")
-def sp_upper(node, src, resolver):
-  value = resolver.substitutor.substitute(node["$upper"], src)
+def sp_upper(node, src, resolver, engine):
+  value = resolver.substitutor.substitute(node["$upper"], src, engine)
   return str(value).upper()
 ```
 

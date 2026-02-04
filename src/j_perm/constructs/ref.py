@@ -9,7 +9,7 @@ from ..special_resolver import _MISSING, SpecialRegistry
 @SpecialRegistry.register("$ref")
 def of_ref(node: Mapping[str, Any], src: Mapping[str, Any], engine: "ActionEngine") -> Any:
     # Expand templates inside "$ref" using configured substitutor
-    ptr = engine.substitutor.substitute(node["$ref"], src)
+    ptr = engine.substitutor.substitute(node["$ref"], src, engine)
 
     dflt = node.get("$default", _MISSING)
     try:

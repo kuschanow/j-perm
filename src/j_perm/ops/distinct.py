@@ -13,14 +13,14 @@ def op_distinct(
         engine: "ActionEngine",
 ) -> MutableMapping[str, Any]:
     """Remove duplicates from a list at the given path, preserving order."""
-    path = engine.substitutor.substitute(step["path"], src)
+    path = engine.substitutor.substitute(step["path"], src, engine)
     lst = engine.pointer_manager.get_pointer(dest, path)
 
     if not isinstance(lst, list):
         raise TypeError(f"{path} is not a list (distinct)")
 
     key = step.get("key", None)
-    key_path = engine.substitutor.substitute(key, src)
+    key_path = engine.substitutor.substitute(key, src, engine)
 
     seen = set()
     unique = []

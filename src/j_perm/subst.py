@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import json
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
@@ -184,21 +183,30 @@ class TemplateSubstitutor:
     # Public API
     # -------------------------------------------------------------------------
 
-    def substitute(self, obj: Any, data: Mapping[str, Any]) -> Any:
-        return self.deep_substitute(obj, data)
+    def substitute(self, obj: Any, data: Mapping[str, Any], engine: "ActionEngine") -> Any:
+        res = self.deep_substitute(obj, data, engine)
+        return self._final_unescape(res)
 
-    def flat_substitute(self, tmpl: str, data: Mapping[str, Any]) -> Any:
-        if "${" not in tmpl:
+    def flat_substitute(self, tmpl: str, data: Mapping[str, Any], engine: "ActionEngine") -> Any:
+        if not self._has_unescaped_placeholder(tmpl):
             return tmpl
-
-        if tmpl.startswith("${") and tmpl.endswith("}"):
-            body = tmpl[2:-1]
-            return copy.deepcopy(self._resolve_expr(body, data))
 
         out: list[str] = []
         i = 0
 
         while i < len(tmpl):
+            # literal "${"
+            if tmpl[i:i + 3] == "$${":
+                out.append("$${")
+                i += 3
+                continue
+
+            # literal "$"
+            if tmpl[i:i + 2] == "$$":
+                out.append("$$")
+                i += 2
+                continue
+
             if tmpl[i: i + 2] == "${":
                 depth = 0
                 j = i + 2
@@ -211,7 +219,7 @@ class TemplateSubstitutor:
                     elif ch == "}":
                         if depth == 0:
                             expr = tmpl[i + 2: j]
-                            val = self._resolve_expr(expr, data)
+                            val = self._resolve_expr(expr, data, engine)
 
                             if isinstance(val, (Mapping, list)):
                                 rendered = json.dumps(val, ensure_ascii=False)
@@ -234,29 +242,29 @@ class TemplateSubstitutor:
 
         return "".join(out)
 
-    def deep_substitute(self, obj: Any, data: Mapping[str, Any], _depth: int = 0) -> Any:
-        if _depth > 50:
+    def deep_substitute(self, obj: Any, data: Mapping[str, Any], engine: "ActionEngine", _depth: int = 0) -> Any:
+        if _depth > engine.max_depth:
             raise RecursionError("too deep interpolation")
 
         if isinstance(obj, str):
-            out = self.flat_substitute(obj, data)
-            if isinstance(out, str) and "${" in out:
-                return self.deep_substitute(out, data, _depth + 1)
+            out = self.flat_substitute(obj, data, engine)
+            if isinstance(out, str) and self._has_unescaped_placeholder(out):
+                return self.deep_substitute(out, data, engine, _depth + 1)
             return out
 
         if isinstance(obj, list):
-            return [self.deep_substitute(item, data, _depth) for item in obj]
+            return [self.deep_substitute(item, data, engine, _depth) for item in obj]
 
         if isinstance(obj, tuple):
-            return [self.deep_substitute(item, data, _depth) for item in obj]
+            return [self.deep_substitute(item, data, engine, _depth) for item in obj]
 
         if isinstance(obj, Mapping):
             out: dict[Any, Any] = {}
             for k, v in obj.items():
-                new_key = self.deep_substitute(k, data, _depth) if isinstance(k, str) else k
+                new_key = self.deep_substitute(k, data, engine, _depth) if isinstance(k, str) else k
                 if new_key in out:
                     raise KeyError(f"duplicate key after substitution: {new_key!r}")
-                out[new_key] = self.deep_substitute(v, data, _depth)
+                out[new_key] = self.deep_substitute(v, data, engine, _depth)
             return out
 
         return obj
@@ -265,7 +273,33 @@ class TemplateSubstitutor:
     # Internals
     # -------------------------------------------------------------------------
 
-    def _resolve_expr(self, expr: str, data: Mapping[str, Any]) -> Any:
+    def _final_unescape(self, obj: Any) -> Any:
+        if isinstance(obj, str):
+            return obj.replace("$${", "${").replace("$$", "$")
+        if isinstance(obj, list):
+            return [self._final_unescape(x) for x in obj]
+        if isinstance(obj, tuple):
+            return tuple(self._final_unescape(x) for x in obj)
+        if isinstance(obj, Mapping):
+            return {self._final_unescape(k) if isinstance(k, str) else k: self._final_unescape(v)
+                    for k, v in obj.items()}
+        return obj
+
+    @staticmethod
+    def _has_unescaped_placeholder(s: str) -> bool:
+        i = 0
+        while True:
+            j = s.find("${", i)
+            if j == -1:
+                return False
+            if j > 0 and s[j - 1] == "$":
+                i = j + 2
+                continue
+            return True
+
+        return False
+
+    def _resolve_expr(self, expr: str, data: Mapping[str, Any], engine: "ActionEngine") -> Any:
         expr = expr.strip()
 
         # 1) Casters
@@ -273,26 +307,26 @@ class TemplateSubstitutor:
             tag = f"{prefix}:"
             if expr.startswith(tag):
                 inner = expr[len(tag):]
-                value = self.flat_substitute(inner, data)
+                value = self.flat_substitute(inner, data, engine)
 
-                if isinstance(value, str) and value.startswith("${") and value.endswith("}"):
-                    value = self.flat_substitute(value, data)
+                if isinstance(value, str) and self._has_unescaped_placeholder(value):
+                    value = self.flat_substitute(value, data, engine)
 
                 return fn(value)
 
         # 2) JMESPath
         if expr.startswith("?"):
             query_raw = expr[1:].lstrip()
-            query_expanded = self.flat_substitute(query_raw, data)
+            query_expanded = self.flat_substitute(query_raw, data, engine)
             return jmespath.search(query_expanded, data, options=self._jp_options)
 
         # 3) Nested template
-        if expr.startswith("${") and expr.endswith("}"):
-            return self.flat_substitute(expr, data)
+        if self._has_unescaped_placeholder(expr):
+            return self.flat_substitute(expr, data, engine)
 
         # 4) JSON Pointer fallback
         pointer = "/" + expr.lstrip("/")
         try:
-            return engine.pointer_manager.maybe_slice(pointer, data)  # type: ignore[arg-type]
+            return engine.pointer_manager.maybe_slice(pointer, data)
         except Exception:
             return None

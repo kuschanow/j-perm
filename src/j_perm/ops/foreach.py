@@ -14,7 +14,7 @@ def op_foreach(
         engine: "ActionEngine",
 ) -> MutableMapping[str, Any]:
     """Iterate over array in source and execute nested actions for each element."""
-    arr_ptr = engine.substitutor.substitute(step["in"], src)
+    arr_ptr = engine.substitutor.substitute(step["in"], src, engine)
 
     default = copy.deepcopy(step.get("default", []))
     skip_empty = bool(step.get("skip_empty", True))

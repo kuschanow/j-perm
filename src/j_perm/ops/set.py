@@ -13,13 +13,13 @@ def op_set(
         engine: "ActionEngine",
 ) -> MutableMapping[str, Any]:
     """Set or append a value at JSON Pointer path in dest."""
-    path = engine.substitutor.substitute(step["path"], src)
+    path = engine.substitutor.substitute(step["path"], src, engine)
     create = bool(step.get("create", True))
     extend_list = bool(step.get("extend", True))
 
     value = engine.special.resolve(step["value"], src, engine)
     if isinstance(value, (str, list, Mapping)):
-        value = engine.substitutor.substitute(value, src)
+        value = engine.substitutor.substitute(value, src, engine)
 
     parent, leaf = engine.pointer_manager.ensure_parent(dest, path, create=create)
 

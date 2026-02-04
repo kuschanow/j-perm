@@ -23,20 +23,20 @@ def op_exec(
         raise ValueError("exec operation requires either 'from' or 'actions' parameter")
 
     if has_from:
-        actions_ptr = engine.substitutor.substitute(step["from"], src)
+        actions_ptr = engine.substitutor.substitute(step["from"], src, engine)
         try:
             actions = engine.pointer_manager.maybe_slice(actions_ptr, src)
         except Exception:
             if "default" in step:
                 actions = engine.special.resolve(step["default"], src, engine)
                 if isinstance(actions, (str, list, dict)):
-                    actions = engine.substitutor.substitute(actions, src)
+                    actions = engine.substitutor.substitute(actions, src, engine)
             else:
                 raise ValueError(f"Cannot find actions at {actions_ptr}")
     else:
         actions = engine.special.resolve(step["actions"], src, engine)
         if isinstance(actions, (str, list, dict)):
-            actions = engine.substitutor.substitute(actions, src)
+            actions = engine.substitutor.substitute(actions, src, engine)
 
     merge = bool(step.get("merge", False))
 

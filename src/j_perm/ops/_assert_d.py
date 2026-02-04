@@ -13,7 +13,7 @@ def op_assert_d(
         engine: "ActionEngine",
 ) -> MutableMapping[str, Any]:
     """Assert node existence and/or value at JSON Pointer path in dest."""
-    path = engine.substitutor.substitute(step["path"], dest)
+    path = engine.substitutor.substitute(step["path"], dest, engine)
 
     try:
         current = engine.pointer_manager.get_pointer(dest, path)

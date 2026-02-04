@@ -15,10 +15,10 @@ def op_copy_d(
         engine: "ActionEngine",
 ) -> MutableMapping[str, Any]:
     """Copy value from dest (self) into another dest path."""
-    path = engine.substitutor.substitute(step["path"], src)
+    path = engine.substitutor.substitute(step["path"], src, engine)
     create = bool(step.get("create", True))
 
-    ptr = engine.substitutor.substitute(step["from"], dest)
+    ptr = engine.substitutor.substitute(step["from"], dest, engine)
     ignore = bool(step.get("ignore_missing", False))
 
     try:

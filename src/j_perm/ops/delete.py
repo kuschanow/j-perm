@@ -13,7 +13,7 @@ def op_delete(
         engine: "ActionEngine",
 ) -> MutableMapping[str, Any]:
     """Delete node at the given JSON Pointer path in dest."""
-    path = engine.substitutor.substitute(step["path"], src)
+    path = engine.substitutor.substitute(step["path"], src, engine)
     ignore = bool(step.get("ignore_missing", True))
 
     try:
