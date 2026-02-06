@@ -1,0 +1,7 @@
+# .coveragerc to control coverage.py
+
+[run]
+data_file = tests/.coverage
+
+[html]
+directory = tests/report

@@ -1,25 +1,143 @@
-# Import built-in operations so that they register on import.
-from . import casters as _builtin_casters  # noqa: F401
-from . import constructs as _builtin_constructs  # noqa: F401
-from . import funcs as _builtin_funcs  # noqa: F401
-from . import ops as _builtin_ops  # noqa: F401
-from . import shorthands as _builtin_shorthands  # noqa: F401
-from .engine import apply_actions, ActionEngine
-from .normalizer import Normalizer, ShorthandRegistry
-from .op_handler import OpRegistry, Handlers
-from .special_resolver import SpecialRegistry, SpecialResolver
-from .subst import JpFuncRegistry, CasterRegistry, TemplateSubstitutor
+"""j_perm DSL engine.
+
+Package layout
+--------------
+core.py          – ABCs, registries, Pipeline, Engine, ExecutionContext, UnescapeRule
+matchers.py      – shared ActionMatchers (OpMatcher, AlwaysMatcher)
+stages/          – StageProcessor impls (shorthand expansion, …)
+handlers/        – ActionHandler + co-located ActionMatcher impls, by logical system
+                     template   – ``${…}`` substitution
+                     special    – ``$ref`` / ``$eval`` dispatch
+                     container  – recursive list/dict descent
+                     identity   – scalar pass-through
+resolvers/       – ValueResolver impls (JSON Pointer, …)
+factory.py       – ``build_default_engine``
+"""
+
+# -- core ----------------------------------------------------------
+from .core import (
+    ExecutionContext,
+    ValueResolver,
+    StageMatcher,
+    StageProcessor,
+    StageNode,
+    StageRegistry,
+    Stage,  # alias → StageProcessor
+    Middleware,
+    ActionMatcher,
+    ActionHandler,
+    ActionNode,
+    ActionTypeRegistry,
+    Pipeline,
+    Engine,
+    UnescapeRule,
+)
+# -- factory -------------------------------------------------------
+from .factory import build_default_engine
+# -- handlers (grouped by logical system) --------------------------
+from .handlers import (
+    # template
+    TemplMatcher,
+    TemplSubstHandler,
+    template_unescape,
+    # special
+    SpecialFn,
+    SpecialMatcher,
+    SpecialResolveHandler,
+    # constructs
+    ref_handler,
+    eval_handler,
+    # container
+    ContainerMatcher,
+    RecursiveDescentHandler,
+    # identity
+    IdentityHandler,
+    # ops
+    SetHandler,
+    CopyHandler,
+    CopyDHandler,
+    DeleteHandler,
+    ForeachHandler,
+    IfHandler,
+    ExecHandler,
+    UpdateHandler,
+    DistinctHandler,
+    ReplaceRootHandler,
+    AssertHandler,
+    AssertDHandler,
+)
+# -- shared matchers -----------------------------------------------
+from .matchers import (
+    OpMatcher,
+    AlwaysMatcher,
+)
+# -- resolvers -----------------------------------------------------
+from .resolvers import PointerResolver
+# -- stages --------------------------------------------------------
+from .stages import (
+    AssertShorthandMatcher,
+    AssertShorthandProcessor,
+    DeleteShorthandMatcher,
+    DeleteShorthandProcessor,
+    AssignShorthandMatcher,
+    AssignShorthandProcessor,
+    build_default_shorthand_stages,
+)
 
 __all__ = [
-    "apply_actions",
-    "ActionEngine",
-    "Normalizer",
-    "ShorthandRegistry",
-    "OpRegistry",
-    "Handlers",
-    "SpecialRegistry",
-    "SpecialResolver",
-    "JpFuncRegistry",
-    "CasterRegistry",
-    "TemplateSubstitutor",
+    # core
+    "ExecutionContext",
+    "ValueResolver",
+    "StageMatcher",
+    "StageProcessor",
+    "StageNode",
+    "StageRegistry",
+    "Stage",
+    "Middleware",
+    "ActionMatcher",
+    "ActionHandler",
+    "ActionNode",
+    "ActionTypeRegistry",
+    "Pipeline",
+    "Engine",
+    "UnescapeRule",
+    # shared matchers
+    "OpMatcher",
+    "AlwaysMatcher",
+    # stages
+    "AssertShorthandMatcher",
+    "AssertShorthandProcessor",
+    "DeleteShorthandMatcher",
+    "DeleteShorthandProcessor",
+    "AssignShorthandMatcher",
+    "AssignShorthandProcessor",
+    "build_default_shorthand_stages",
+    # handlers
+    "TemplMatcher",
+    "TemplSubstHandler",
+    "template_unescape",
+    "SpecialFn",
+    "SpecialMatcher",
+    "SpecialResolveHandler",
+    "ref_handler",
+    "eval_handler",
+    "ContainerMatcher",
+    "RecursiveDescentHandler",
+    "IdentityHandler",
+    "SetHandler",
+    "CopyHandler",
+    "CopyDHandler",
+    "DeleteHandler",
+    "ForeachHandler",
+    "IfHandler",
+    "ExecHandler",
+    "UpdateHandler",
+    "DistinctHandler",
+    "ReplaceRootHandler",
+    "AssertHandler",
+    "AssertDHandler",
+    # resolvers
+    "PointerResolver",
+    # factory
+    "build_default_engine",
 ]

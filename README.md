@@ -1,766 +1,617 @@
 # J-Perm
 
-A small, composable JSON-transformation DSL implemented in Python.
+A composable JSON transformation DSL with a powerful, extensible architecture.
 
-The library lets you describe transformations as **data** (a list of steps) and then apply them to an input document. It supports JSON Pointer paths, custom JMESPath expressions, interpolation with `${...}` syntax, special reference/evaluation values, and a rich set of built-in operations.
+J-Perm lets you describe data transformations as **executable specifications** — a list of steps that can be applied to input documents. It supports
+JSON Pointer addressing, template interpolation with `${...}` syntax, special constructs (`$ref`, `$eval`), and a rich set of built-in operations.
 
-J-Perm is built around a **pluggable architecture**: operations, special constructs, JMESPath functions, and casters are all registered independently and composed into an execution engine.
+**Key features:**
 
----
-
-## Features
-
-* JSON Pointer read/write with support for:
-
-  * root pointers (`""`, `"/"`, `"."`)
-  * relative `..` segments
-  * list slices like `/items[1:3]`
-* Interpolation templates:
-
-  * `${/path/to/node}` — JSON Pointer lookup
-  * `${int:/path}` / `${float:/path}` / `${bool:/path}` — type casters
-  * `${? some.jmespath(expression) }` — JMESPath with custom functions
-* Special values:
-
-  * `$ref` — reference into the source document
-  * `$eval` — nested DSL evaluation with optional `$select`
-* Built-in operations:
-
-  * `set`, `copy`, `copyD`, `delete`, `assert`
-  * `foreach`, `if`, `distinct`
-  * `replace_root`, `exec`, `update`
-* Shorthand syntax for concise scripts (`~delete`, `~assert`, `field[]`, pointer assignments)
-* Schema helper: approximate JSON Schema generation for a given DSL script
-* Fully extensible via registries:
-
-  * operations
-  * special constructs
-  * JMESPath functions
-  * casters
+- 🎯 **Declarative** — transformations are data, not code
+- 🔌 **Pluggable architecture** — stages, handlers, matchers form a composable pipeline
+- 🌳 **Hierarchical registries** — organize operations and value processors in trees
+- 📦 **Self-contained** — zero dependencies on external registries
+- 🎨 **Shorthand syntax** — write concise scripts that expand to full operations
 
 ---
 
-## Architecture overview
+## Quick Example
 
-J-Perm is composed from four independent registries:
+```python
+from j_perm import build_default_engine
 
-| Registry          | Purpose                                       |
-| ----------------- | --------------------------------------------- |
-| `OpRegistry`      | Registers DSL operations (`op`)               |
-| `SpecialRegistry` | Registers special values (`$ref`, `$eval`, …) |
-| `JpFuncRegistry`  | Registers custom JMESPath functions           |
-| `CasterRegistry`  | Registers `${type:...}` casters               |
+engine = build_default_engine()
 
-All registries can be imported directly from `j_perm`.
+# Source data
+source = {
+    "users": [
+        {"name": "Alice", "age": "17"},
+        {"name": "Bob", "age": "22"}
+    ]
+}
 
-At runtime, these parts are wired together into an execution engine that evaluates the DSL.
+# Transformation spec (using shorthands)
+spec = {
+    "op": "foreach",
+    "in": "/users",
+    "do": {
+        "/adults[]": {
+            "$eval": [
+                {"/name": "/item/name", "/age": "${int:/item/age}"},
+                {"op": "if", "path": "/age", "cond": "${?dest.age >= `18`}", "else": {"~delete": "/age"}}
+            ]
+        }
+    }
+}
+
+result = engine.apply(spec, source=source, dest={})
+# → {"adults": [{"name": "Bob", "age": 22}]}
+```
+
+---
+
+## Installation
+
+```bash
+pip install j-perm
+```
+
+*(or copy the package into your project)*
+
+---
+
+## Architecture Overview
+
+J-Perm is built on a **pipeline architecture** with two main levels:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  spec (user input)                                      │
+│    │                                                    │
+│    ▼                                                    │
+│  ┌──────────────────────────────────────────────────┐   │
+│  │ STAGES (batch preprocessing, priority order)     │   │
+│  │  • ShorthandExpansion → expand ~delete, etc      │   │
+│  │  • YourCustomStage                               │   │
+│  └──────────────────────────────────────────────────┘   │
+│    │                                                    │
+│    ▼                                                    │
+│  List[step]                                             │
+│    │                                                    │
+│    ▼  for each step:                                    │
+│  ┌──────────────────────────────────────────────────┐   │
+│  │ MIDDLEWARES (per-step, priority order)           │   │
+│  │  • Validation, logging, etc.                     │   │
+│  └──────────────────────────────────────────────────┘   │
+│    │                                                    │
+│    ▼                                                    │
+│  ┌──────────────────────────────────────────────────┐   │
+│  │ REGISTRY (hierarchical dispatch tree)            │   │
+│  │  • SetHandler, CopyHandler, ForeachHandler, ...  │   │
+│  └──────────────────────────────────────────────────┘   │
+│    │                                                    │
+│    │  handlers call ctx.engine.process_value(...)       │
+│    └─────────────────────────────────────┐              │
+│                                          ▼              │
+│  ┌──────────────────────────────────────────────────┐   │
+│  │ VALUE PIPELINE (stabilization loop)              │   │
+│  │  • SpecialResolveHandler ($ref, $eval)           │   │
+│  │  • TemplSubstHandler (${...})                    │   │
+│  │  • RecursiveDescentHandler (containers)          │   │
+│  │  • IdentityHandler (scalars)                     │   │
+│  └──────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Core Components
+
+| Component              | Purpose                                                          |
+|------------------------|------------------------------------------------------------------|
+| **Engine**             | Orchestrates pipelines, manages context, runs stabilization loop |
+| **Pipeline**           | Runs stages → middlewares → registry dispatch for each step      |
+| **StageRegistry**      | Tree of batch preprocessors (run-all, priority order)            |
+| **ActionTypeRegistry** | Tree of action handlers (first-match or run-all)                 |
+| **ValueResolver**      | Abstraction for addressing (JSON Pointer implementation)         |
 
 ---
 
 ## Core API
 
-### `ActionEngine.apply_actions`
+### Building an Engine
 
 ```python
-from j_perm import ActionEngine, Handlers, SpecialResolver, TemplateSubstitutor
-```
+from j_perm import build_default_engine
 
-Typical setup:
+# Default engine with all built-ins
+engine = build_default_engine()
 
-```python
-substitutor = TemplateSubstitutor()
-special = SpecialResolver()
-handlers = Handlers()
-normalizer = Normalizer()
-
-engine = ActionEngine(
-  handlers=handlers,
-  special=special,
-  substitutor=substitutor,
-  normalizer=normalizer,
+# Custom specials (None = use defaults: $ref, $eval)
+engine = build_default_engine(
+    specials={"$ref": my_ref_handler, "$custom": my_handler},
+    casters={"int": lambda x: int(x), "json": lambda x: json.loads(x)},
+    jmes_options=jmespath.Options(custom_functions=CustomFunctions())
 )
 ```
 
-### Signature
+### Applying Transformations
 
 ```python
-apply_actions(
-  actions: Any,
-*,
-dest: MutableMapping[str, Any] | List[Any],
-source: Mapping[str, Any] | List[Any],
-) -> Mapping[str, Any]
+result = engine.apply(
+    spec,  # DSL script (dict or list)
+    source=source,  # Source context (for pointers, templates)
+    dest=dest,  # Initial destination (default: {})
+)
 ```
 
-* **`actions`** — DSL script (list or mapping)
-* **`dest`** — initial destination document
-* **`source`** — source context available to pointers, interpolation, `$ref`, `$eval`
-* Returns a **deep copy** of the final `dest`
+**Returns:** Deep copy of the final `dest` after all transformations.
 
 ---
 
-## Basic usage
+## Features
+
+### 1. JSON Pointer Addressing
+
+J-Perm uses **RFC 6901 JSON Pointer** with extensions:
 
 ```python
-source = {
-  "users": [
-    {"name": "Alice", "age": 17},
-    {"name": "Bob",   "age": 22}
-  ]
-}
+from j_perm import PointerResolver
 
-actions = [
-    # Start with empty list
-    {"op": "replace_root", "value": []},
+resolver = PointerResolver()
 
-    # For each user - build a simplified object
-    {
-        "op": "foreach",
-        "in": "/users",
-        "as": "u",
-        "do": [
-            {
-                "op": "set",
-                "path": "/-",
-                "value": {
-                    "name": "${/u/name}",
-                    "is_adult": {
-                        "$eval": [
-                            {"op": "replace_root", "value": False},
-                            {
-                                "op": "if",
-                                "cond": "${?`${/u/age}` >= `18`}",
-                                "then": [{"op": "replace_root", "value": True}]
-                            }
-                        ]
-                    }
-                }
-            }
-        ]
-    }
-]
+# Basic pointers
+resolver.get("/users/0/name", data)  # → "Alice"
 
-result = engine.apply_actions(actions, dest={}, source=source)
+# Root references (work on scalars too!)
+resolver.get(".", 42)  # → 42
+resolver.get("/", "text")  # → "text"
+
+# Parent navigation
+resolver.get("/a/b/../c", data)  # → data["a"]["c"]
+
+# List slices
+resolver.get("/items[1:3]", data)  # → [item1, item2]
+
+# Append notation
+resolver.set("/items/-", data, "new")  # Append to list
 ```
+
+**Key feature:** Unlike standard JSON Pointer, `PointerResolver` works on **any type** (scalars, lists, dicts) for root references.
 
 ---
 
-## Interpolation & expression system (`${...}`)
+### 2. Template Interpolation (`${...}`)
 
-Interpolation is handled by `TemplateSubstitutor` and is used throughout operations such as `set`, `copy`, `exec`, `update`, schema building, etc.
+Templates are resolved by `TemplSubstHandler` in the value pipeline.
 
-### JSON Pointer interpolation
+#### JSON Pointer lookup
+
+```python
+"${/user/name}"  # → Resolve pointer from source
+```
+
+#### Type casters (built-in)
+
+```python
+"${int:/age}"  # → int(value)
+"${float:/price}"
+"${bool:/flag}"  # → bool(int(value)) if int/str, else bool(value)
+"${str:/id}"
+```
+
+#### JMESPath queries
+
+```python
+"${?source.items[?price > `10`].name}"  # → Query source with JMESPath
+"${?dest.total}"                         # → Query destination
+"${?add(dest.x, source.y)}"              # → Mix source and dest
+```
+
+**Built-in JMESPath functions:** `add(a, b)`, `subtract(a, b)`
+
+**Data structure:** JMESPath expressions use explicit namespaces:
+- `source.*` – access source document
+- `dest.*` – access destination document
+
+#### Nested templates
+
+```python
+"${${/path_to_field}}"  # → Resolve inner template first
+```
+
+#### Escaping
 
 ```text
-${/path/to/value}
-```
-
-Resolves a JSON Pointer against the current source context.
-
----
-
-### Casters
-
-```text
-${int:/age}
-${float:/height}
-${bool:/flag}
-```
-
-Casters are registered via `CasterRegistry` and can be extended by users.
-
----
-
-### JMESPath expressions
-
-```text
-${? items[?price > `10`].name }
-```
-
-JMESPath expressions are evaluated against the source context with access to custom JMESPath functions registered in `JpFuncRegistry`.
-
----
-
-### Multiple templates
-
-Any string may contain multiple `${...}` expressions, resolved left-to-right.
-
----
-
-## Special values: `$ref` and `$eval`
-
-Special values are resolved by `SpecialResolver`.
-
-### `$ref`
-
-```json
-{ "$ref": "/path" }
-```
-
-Resolves a pointer against the source context and injects the value.
-
----
-
-### `$eval`
-
-```json
-{ "$eval": [ ... ] }
-```
-
-Executes a nested DSL script using the same engine configuration and injects its result.
-
----
-
-## Shorthand syntax
-
-Shorthand syntax is expanded during normalization:
-
-* `~delete`
-* `~assert`
-* `field[]`
-* pointer assignments
-
-These are converted into explicit operation steps before execution.
-
----
-
-# Built-ins
-
-## Built-in casters (`${type:...}`)
-
-Casters are registered in `CasterRegistry` and used in templates as `${name:<expr>}`.
-The `<expr>` part is first expanded (templates inside are allowed), then cast is applied.
-
-### `int`
-
-**Form:** `${int:/path}`
-**Behavior:** `int(value)`
-
-### `float`
-
-**Form:** `${float:/path}`
-**Behavior:** `float(value)`
-
-### `str`
-
-**Form:** `${str:/path}`
-**Behavior:** `str(value)`
-
-### `bool`
-
-**Form:** `${bool:/path}`
-**Behavior:** compatible with the old implementation:
-
-* if value is `int` or `str` → `bool(int(value))`
-* otherwise → `bool(value)`
-
-Examples:
-
-```text
-${bool:1}      -> True
-${bool:"0"}    -> False
-${bool:"2"}    -> True
-${bool:""}     -> False (falls back to bool("") == False)
+$${ → ${ (literal)
+$$  → $  (literal)
 ```
 
 ---
 
-## Built-in special constructs (`$ref`, `$eval`)
+### 3. Special Constructs
 
-Special values are resolved by `SpecialResolver` while walking value trees.
-If a mapping contains a known special key, that handler takes over and the whole mapping is replaced by the resolved value.
+Special values are resolved by `SpecialResolveHandler`.
 
-### `$ref`
-
-**Shape:**
-
-```jsonc
-{ "$ref": "<pointer or template>", "$default": <optional> }
-```
-
-**Behavior:**
-
-* resolve `"$ref"` through template substitution (so it may contain `${...}`)
-* treat it as a pointer and read from **source context**
-* if pointer fails:
-
-  * if `"$default"` exists → deep-copy and return default
-  * else → re-raise (error)
-
-Example:
-
-```json
-{ "op": "set", "path": "/user", "value": { "$ref": "/rawUser" } }
-```
-
-### `$eval`
-
-**Shape:**
-
-```jsonc
-{ "$eval": <actions>, "$select": "<optional pointer>" }
-```
-
-**Behavior:**
-
-* run nested DSL using the same engine configuration
-* if `"$select"` is present → select a sub-value from the nested result
-
-Example:
+#### `$ref` — Reference resolution
 
 ```json
 {
-  "op": "set",
-  "path": "/flag",
-  "value": {
-    "$eval": [
-      { "op": "replace_root", "value": false },
-      { "op": "replace_root", "value": true }
-    ],
-    "$select": ""
-  }
+    "$ref": "/path/to/value",
+    "$default": "fallback"
 }
 ```
 
----
+- Resolves pointer from **source** context
+- Returns deep copy (no aliasing)
+- Supports `$default` fallback
 
-## Built-in JMESPath functions
+#### `$eval` — Nested evaluation
 
-Custom JMESPath functions are registered in `JpFuncRegistry` and available inside `${? ... }`.
-
-### `subtract(a, b)`
-
-**Signature:** `subtract(number, number) -> number`
-**Behavior:** returns `a - b`
-
-Example:
-
-```text
-${? subtract(price, tax) }
+```json
+{
+    "$eval": [
+        {
+            "op": "set",
+            "path": "/x",
+            "value": 1
+        }
+    ],
+    "$select": "/x"
+}
 ```
 
-> Если у тебя есть другие встроенные JMES-функции в проекте (кроме `subtract`), скажи их имена — я добавлю их описания в README в том же формате.
+- Executes nested DSL with `dest={}`
+- Optionally selects sub-path from result
 
 ---
 
-## Built-in operations
+### 4. Shorthand Syntax
 
-All operations are registered in `OpRegistry` under their `op` name.
-They are executed by `ActionEngine.apply_actions()` after normalization/shorthand expansion.
+Shorthands are expanded by **priority-ordered StageProcessors** before execution.
 
-### Common notes
+#### `~assert` / `~assertD`
 
-* Many operations accept values that may contain:
+```json
+{
+    "~assert": {
+        "/x": 10,
+        "/y": 20
+    }
+}
+```
 
-  * special constructs (`$ref`, `$eval`, and user-added ones)
-  * templates (`${...}`)
-* Unless stated otherwise: values are typically resolved as:
+Expands to:
 
-  1. `SpecialResolver.resolve(...)`
-  2. `TemplateSubstitutor.substitute(...)`
-  3. deep-copied before writing into `dest`
+```json
+[
+    {
+        "op": "assert",
+        "path": "/x",
+        "equals": 10
+    },
+    {
+        "op": "assert",
+        "path": "/y",
+        "equals": 20
+    }
+]
+```
+
+#### `~delete`
+
+```json
+{
+    "~delete": [
+        "/tmp",
+        "/cache"
+    ]
+}
+```
+
+Expands to:
+
+```json
+[
+    {
+        "op": "delete",
+        "path": "/tmp"
+    },
+    {
+        "op": "delete",
+        "path": "/cache"
+    }
+]
+```
+
+#### Append notation (`field[]`)
+
+```json
+{
+    "/items[]": 123
+}
+```
+
+Expands to:
+
+```json
+{
+    "op": "set",
+    "path": "/items/-",
+    "value": 123
+}
+```
+
+#### Pointer assignment
+
+```json
+{
+    "/name": "/user/fullName"
+}
+```
+
+Expands to:
+
+```json
+{
+    "op": "copy",
+    "from": "/user/fullName",
+    "path": "/name",
+    "ignore_missing": true
+}
+```
+
+#### Literal assignment
+
+```json
+{
+    "/status": "active"
+}
+```
+
+Expands to:
+
+```json
+{
+    "op": "set",
+    "path": "/status",
+    "value": "active"
+}
+```
+
+**Priority order:** `~assert` (100) → `~delete` (50) → `assign/copy` (0)
 
 ---
+
+## Built-in Operations
+
+All operations are registered as `ActionHandler` instances in the main registry.
 
 ### `set`
 
-Set or append a value at a JSON Pointer path in `dest`.
+Write value to destination path.
 
-**Shape:**
-
-```jsonc
+```json
 {
-  "op": "set",
-  "path": "/pointer",
-  "value": <any>,
-  "create": true,   // default: true
-  "extend": true    // default: true
+    "op": "set",
+    "path": "/target",
+    "value": "...",
+    "create": true,
+    // Auto-create parents (default: true)
+    "extend": true
+    // Extend lists on append (default: true)
 }
 ```
 
-**Semantics:**
-
-* writes resolved `value` into `dest[path]`
-* if `path` ends with `"/-"` → append to list
-* if appending and `value` is a list:
-
-  * `extend=true` → extend the list
-  * `extend=false` → append list as one item
-* `create=true` → create missing parent containers
+**Special:** `path` ending with `/-` appends to list.
 
 ---
 
 ### `copy`
 
-Copy value from **source context** to `dest` (internally uses `set`).
+Copy value from source to destination.
 
-**Shape:**
-
-```jsonc
+```json
 {
-  "op": "copy",
-  "from": "/source/pointer",
-  "path": "/target/pointer",
-  "create": true,          // default: true
-  "extend": true,          // default: true
-  "ignore_missing": false, // default: false
-  "default": <any>         // optional
+    "op": "copy",
+    "from": "/source/path",
+    "path": "/dest/path",
+    "ignore_missing": false,
+    // Skip if missing (default: false)
+    "default": "..."
+    // Fallback value
 }
 ```
-
-**Semantics:**
-
-* `"from"` may be templated, then used as a pointer into source
-* if missing:
-
-  * `ignore_missing=true` → no-op
-  * else if `"default"` provided → use default
-  * else → error
 
 ---
 
 ### `copyD`
 
-Copy value from **dest** into another location in `dest` (self-copy).
+Copy within destination (self-copy).
 
-**Shape:**
-
-```jsonc
+```json
 {
-  "op": "copyD",
-  "from": "/dest/pointer",
-  "path": "/target/pointer",
-  "create": true,          // default: true
-  "ignore_missing": false, // default: false
-  "default": <any>         // optional
+    "op": "copyD",
+    "from": "/dest/src",
+    "path": "/dest/target"
 }
 ```
-
-**Semantics:**
-
-* `"from"` pointer is resolved against current `dest`
-* pointer string itself may be templated with source context
 
 ---
 
 ### `delete`
 
-Delete a node at a pointer in `dest`.
+Remove value at path.
 
-**Shape:**
-
-```jsonc
+```json
 {
-  "op": "delete",
-  "path": "/pointer",
-  "ignore_missing": true   // default: true
+    "op": "delete",
+    "path": "/remove",
+    "ignore_missing": true
+    // Don't error if missing (default: true)
 }
 ```
-
-**Notes:**
-
-* path must not end with `"-"`
-* if missing and `ignore_missing=false` → error
-
----
-
-### `assert`
-
-Assert node existence and optional equality in `dest`.
-
-**Shape:**
-
-```jsonc
-{
-  "op": "assert",
-  "path": "/pointer",
-  "equals": <any> // optional
-}
-```
-
-**Semantics:**
-
-* if path missing → `AssertionError`
-* if `equals` provided and not equal → `AssertionError`
 
 ---
 
 ### `foreach`
 
-Iterate over an array (or mapping) from source context and execute nested actions.
+Iterate over array/mapping.
 
-**Shape:**
-
-```jsonc
+```json
 {
-  "op": "foreach",
-  "in": "/array/path",
-  "do": [ ... ],
-  "as": "item",      // default: "item"
-  "default": [],     // default: []
-  "skip_empty": true // default: true
+    "op": "foreach",
+    "in": "/items",
+    "as": "item",
+    // Variable name (default: "item")
+    "do": [
+        ...
+    ],
+    // Nested actions
+    "skip_empty": true,
+    // Skip if empty (default: true)
+    "default": []
+    // Fallback if missing
 }
 ```
 
-**Semantics:**
-
-* resolve `"in"` pointer against source context
-* if missing → use `"default"`
-* if resolved value is a dict → iterate over items as pairs
-* for each element:
-
-  * extend source context with variable name `"as"`
-  * execute `"do"` with same engine
-* on exception inside body → restore `dest` from snapshot
+**Note:** If source is a dict, iterates over `(key, value)` tuples.
 
 ---
 
 ### `if`
 
-Conditionally execute nested actions.
+Conditional execution.
 
-**Path-based mode:**
+**Path mode:**
 
-```jsonc
+```json
 {
-  "op": "if",
-  "path": "/pointer",
-  "equals": <any>,   // optional
-  "exists": true,    // optional
-  "then": [ ... ],   // optional
-  "else": [ ... ],   // optional
-  "do":   [ ... ]    // optional fallback success branch
+    "op": "if",
+    "path": "/check",
+    "equals": "value",
+    // Optional
+    "exists": true,
+    // Optional
+    "then": [
+        ...
+    ],
+    // Success branch
+    "else": [
+        ...
+    ]
+    // Failure branch
 }
 ```
 
-**Expression-based mode:**
+**Expression mode:**
 
-```jsonc
+```json
 {
-  "op": "if",
-  "cond": "${?...}",
-  "then": [ ... ],
-  "else": [ ... ],
-  "do":   [ ... ]
+    "op": "if",
+    "cond": "${?source.age >= `18`}",
+    "then": [
+        ...
+    ]
 }
 ```
-
-**Semantics:**
-
-* one of `path` or `cond` must be present
-* `then` runs on true, `else` runs on false
-* `do` is used as “then” if `then` is missing
-* snapshot + restore on exceptions inside chosen branch
-
----
-
-### `distinct`
-
-Remove duplicates from a list at `dest[path]`, preserving order.
-
-**Shape:**
-
-```jsonc
-{
-  "op": "distinct",
-  "path": "/list/path",
-  "key": "/key/pointer" // optional
-}
-```
-
-**Semantics:**
-
-* target must be a list
-* if `key` provided → key pointer is evaluated per item
-
----
-
-### `replace_root`
-
-Replace the whole destination root with a new value.
-
-**Shape:**
-
-```jsonc
-{
-  "op": "replace_root",
-  "value": <any>
-}
-```
-
-**Semantics:**
-
-* resolve specials/templates inside `value`
-* deep-copy, then replace entire `dest`
 
 ---
 
 ### `exec`
 
-Execute a nested script held inline or referenced from source context.
+Execute nested script.
 
-**Pointer mode:**
+**From source:**
 
-```jsonc
+```json
 {
-  "op": "exec",
-  "from": "/script/path",
-  "default": <any>,   // optional
-  "merge": false      // default: false
+    "op": "exec",
+    "from": "/script",
+    "merge": false
+    // Replace dest (default) or merge into it
 }
 ```
 
-**Inline mode:**
+**Inline:**
 
-```jsonc
+```json
 {
-  "op": "exec",
-  "actions": [ ... ],
-  "merge": false      // default: false
+    "op": "exec",
+    "actions": [
+        ...
+    ]
 }
 ```
-
-**Semantics:**
-
-* exactly one of `from` / `actions`
-* if `from` cannot be resolved:
-
-  * if `default` present → use it (after specials/templates)
-  * else → error
-* `merge=false`:
-
-  * run nested script with `dest={}`
-  * replace current `dest` with result
-* `merge=true`:
-
-  * run nested script on current dest (like a sub-call)
 
 ---
 
 ### `update`
 
-Update a mapping at `path` using either source mapping (`from`) or inline mapping (`value`).
+Merge mapping into target.
 
-**Shape:**
-
-```jsonc
+```json
 {
-  "op": "update",
-  "path": "/target/path",
-  "from": "/source/path", // required in from-mode
-  "value": { ... },       // required in value-mode
-  "default": { ... },     // optional (from-mode only)
-  "create": true,         // default: true
-  "deep": false           // default: false
+    "op": "update",
+    "path": "/obj",
+    "value": {
+        "b": 2
+    },
+    // Or "from": "/source/obj"
+    "deep": false
+    // Recursive merge (default: false)
 }
 ```
 
-**Semantics:**
-
-* exactly one of `from` / `value`
-* update payload must be a mapping, else `TypeError`
-* target at `path` must be mutable mapping, else `TypeError`
-* `deep=false` → shallow `dict.update`
-* `deep=true` → recursive merge for nested mappings
-
 ---
 
-## Shorthand normalization
+### `distinct`
 
-In addition to explicit DSL steps, J-Perm supports a *shorthand syntax* for more concise scripts.
-Shorthand forms are expanded into regular operation steps **before execution**.
-
-Shorthand expansion is implemented as a pluggable normalization layer, similar to operations and special constructs.
-
-### How it works
-
-During normalization, each mapping entry is processed by a chain of registered *shorthand rules*:
-
-1. Each rule decides whether it can handle a given `(key, value)` pair.
-2. If a rule matches, it expands the entry into one or more explicit operation steps.
-3. The first matching rule wins.
-4. If no rule matches, normalization fails with an error.
-
-The resulting list of steps is then executed by the engine as a normal DSL script.
-
----
-
-### Built-in shorthand rules
-
-The following shorthand forms are enabled by default.
-
-#### Delete shorthand (`~delete`)
-
-```json
-{ "~delete": ["/a", "/b"] }
-```
-
-Expands into:
-
-```json
-{ "op": "delete", "path": "/a" }
-{ "op": "delete", "path": "/b" }
-```
-
----
-
-#### Assert shorthand (`~assert`)
-
-Mapping form:
-
-```json
-{ "~assert": { "/x": 10, "/y": 20 } }
-```
-
-Expands into:
-
-```json
-{ "op": "assert", "path": "/x", "equals": 10 }
-{ "op": "assert", "path": "/y", "equals": 20 }
-```
-
-List / string form:
-
-```json
-{ "~assert": ["/x", "/y"] }
-```
-
-Expands into existence-only assertions.
-
----
-
-#### Append shorthand (`field[]`)
-
-A key ending with `[]` means *append to a list* at that path:
-
-```json
-{ "items[]": 123 }
-```
-
-Expands into:
-
-```json
-{ "op": "set", "path": "/items/-", "value": 123 }
-```
-
----
-
-#### Pointer assignment shorthand
-
-If a value is a string that starts with `/`, it is treated as a source pointer:
-
-```json
-{ "name": "/user/fullName" }
-```
-
-Expands into:
+Remove duplicates from list.
 
 ```json
 {
-  "op": "copy",
-  "from": "/user/fullName",
-  "path": "/name",
-  "ignore_missing": true
+    "op": "distinct",
+    "path": "/items",
+    "key": "/id"
+    // Optional: compare by nested field
+}
+```
+
+---
+
+### `replace_root`
+
+Replace entire destination.
+
+```json
+{
+    "op": "replace_root",
+    "value": {
+        "new": "root"
+    }
+}
+```
+
+---
+
+### `assert` / `assertD`
+
+Assert value existence/equality.
+
+```json
+{
+    "op": "assert",
+    // Check source
+    "path": "/required",
+    "equals": "value"
+    // Optional
+}
+```
+
+```json
+{
+    "op": "assertD",
+    // Check destination
+    "path": "/expected"
 }
 ```
 
@@ -768,97 +619,337 @@ Expands into:
 
 ## Extending J-Perm
 
-### Custom operations
+### Custom Operations
+
+Create a new `ActionHandler` and register it:
 
 ```python
-from ..op_handler import OpRegistry
+from j_perm import ActionHandler, ActionNode, OpMatcher, ExecutionContext
 
-@OpRegistry.register("my_op")
-def my_op(step, dest, src, engine):
-  return dest
+
+class MyOpHandler(ActionHandler):
+    def execute(self, step, ctx: ExecutionContext):
+        # Your logic here
+        return ctx.dest
+
+
+# Register in main registry (in build_default_engine or custom factory)
+registry.register(ActionNode(
+    name="my_op",
+    priority=10,
+    matcher=OpMatcher("my_op"),
+    handler=MyOpHandler(),
+))
 ```
 
 ---
 
-### Custom special constructs
+### Custom Special Constructs
+
+Add a `SpecialFn` to the specials dict:
 
 ```python
-from j_perm import SpecialRegistry
+def my_special(node, ctx):
+    value = ctx.engine.process_value(node["$mySpecial"], ctx)
+    return value.upper()
 
-@SpecialRegistry.register("$upper")
-def sp_upper(node, src, resolver, engine):
-  value = resolver.substitutor.substitute(node["$upper"], src, engine)
-  return str(value).upper()
+
+engine = build_default_engine(specials={
+    "$ref": ref_handler,
+    "$eval": eval_handler,
+    "$mySpecial": my_special,
+})
 ```
 
 ---
 
-### Custom JMESPath functions
+### Custom Stages
+
+Create a `StageProcessor` for batch preprocessing:
 
 ```python
-from j_perm import JpFuncRegistry
-from jmespath import functions as jp_funcs
+from j_perm import StageProcessor, StageNode, StageRegistry
 
-@JpFuncRegistry.register("subtract")
-@jp_funcs.signature({"types": ["number"]}, {"types": ["number"]})
-def _subtract(self, a, b):
-  return a - b
-```
 
-Usage in DSL:
-
-```text
-${? subtract(price, tax) }
-```
-
----
-
-### Custom casters
-
-```python
-from j_perm import CasterRegistry
-
-@CasterRegistry.register("json")
-def cast_json(x):
-  return json.loads(x)
-```
-
-Usage:
-
-```text
-${json:/raw_payload}
-```
-
----
-
-### Custom shorthand rules
-
-```python
-from j_perm import ShorthandRegistry, ExpandResult
-
-@ShorthandRegistry.register("name", priority=10)
-def my_shorthand_rule(key: str, value: Any) -> ExpandResult | None:
-    if key.startswith("my_prefix_"):
-        # expand into steps
-        steps = [ ... ]
+class ValidateStage(StageProcessor):
+    def apply(self, steps, ctx):
+        # Validate/transform steps
         return steps
+
+
+# Register in main pipeline stages
+stages = build_default_shorthand_stages()
+stages.register(StageNode(
+    name="validate",
+    priority=200,  # Higher = runs earlier
+    processor=ValidateStage(),
+))
+
+# Use in custom engine
+main_pipeline = Pipeline(stages=stages, registry=main_registry)
 ```
 
 ---
 
-## Plugin loading
+### Custom Casters
 
-Registries collect definitions **at import time**.
-To enable “use all registered components”, ensure that modules defining custom ops, specials, casters, or JMESPath functions are imported before engine construction.
-
-A common pattern is to import all plugins in one place:
+Provide custom casters to `TemplSubstHandler`:
 
 ```python
-import my_project.jperm_plugins
+from j_perm import TemplSubstHandler
+
+custom_casters = {
+    "int": lambda x: int(x),
+    "json": lambda x: json.loads(x),
+}
+
+handler = TemplSubstHandler(casters=custom_casters)
+```
+
+Or use the default (built-in `int`, `float`, `bool`, `str`).
+
+---
+
+### Custom Matchers
+
+Implement `ActionMatcher` or `StageMatcher`:
+
+```python
+from j_perm import ActionMatcher
+
+
+class PrefixMatcher(ActionMatcher):
+    def __init__(self, prefix):
+        self.prefix = prefix
+
+    def matches(self, step):
+        return isinstance(step, dict) and
+            step.get("op", "").startswith(self.prefix)
+```
+
+---
+
+## Advanced Topics
+
+### Value Stabilization Loop
+
+When handlers call `ctx.engine.process_value(value, ctx)`, the value pipeline runs repeatedly until:
+
+1. Output equals input (stable)
+2. `value_max_depth` iterations reached (default: 50)
+
+This resolves nested templates and special constructs:
+
+```python
+# Input: {"$ref": "/path_to_template"}
+# Pass 1: {"$ref": ...} → "${/nested}"
+# Pass 2: "${/nested}" → "final"
+# Pass 3: "final" → "final" (stable ✓)
+```
+
+---
+
+### Hierarchical Registries
+
+Both `StageRegistry` and `ActionTypeRegistry` support tree structures:
+
+```python
+# Group related operations
+math_registry = ActionTypeRegistry()
+math_registry.register(ActionNode("add", 10, AddMatcher(), AddHandler()))
+math_registry.register(ActionNode("sub", 10, SubMatcher(), SubHandler()))
+
+# Mount as sub-tree
+main_registry.register_group(
+    "math",
+    math_registry,
+    matcher=OpMatcher("math"),
+    priority=50,
+)
+```
+
+---
+
+### Priority and Execution Order
+
+**Stages:** All matching stages run in priority order (high → low).
+
+**Actions:** First matching handler executes (unless `exclusive=False`).
+
+**Shorthands:**
+
+1. `AssertShorthandProcessor` (100) — extracts `~assert`, `~assertD`
+2. `DeleteShorthandProcessor` (50) — extracts `~delete`
+3. `AssignShorthandProcessor` (0) — fallback for all remaining keys
+
+---
+
+### Unescape Rules
+
+After value stabilization, registered `UnescapeRule` callables strip escape sequences:
+
+```python
+from j_perm import UnescapeRule
+
+# Built-in: template_unescape (strips $${ → ${, $$ → $)
+# Registered at priority 0
+
+# Add custom unescape
+engine.unescape_rules.append(
+    UnescapeRule(name="custom", priority=10, unescape=my_unescape_fn)
+)
+```
+
+---
+
+## API Reference
+
+### Core Classes
+
+```python
+from j_perm import (
+    # Core infrastructure
+    ExecutionContext,
+    ValueResolver,
+    Engine,
+    Pipeline,
+
+    # Stage system
+    StageProcessor,
+    StageMatcher,
+    StageNode,
+    StageRegistry,
+
+    # Action system
+    ActionHandler,
+    ActionMatcher,
+    ActionNode,
+    ActionTypeRegistry,
+
+    # Middleware
+    Middleware,
+
+    # Unescape
+    UnescapeRule,
+)
+```
+
+### Handlers
+
+```python
+from j_perm import (
+    # Value handlers
+    TemplMatcher,
+    TemplSubstHandler,
+    SpecialMatcher,
+    SpecialResolveHandler,
+    ContainerMatcher,
+    RecursiveDescentHandler,
+    IdentityHandler,
+
+    # Special construct functions
+    ref_handler,
+    eval_handler,
+
+    # Operation handlers
+    SetHandler,
+    CopyHandler,
+    CopyDHandler,
+    DeleteHandler,
+    ForeachHandler,
+    IfHandler,
+    ExecHandler,
+    UpdateHandler,
+    DistinctHandler,
+    ReplaceRootHandler,
+    AssertHandler,
+    AssertDHandler,
+)
+```
+
+### Utilities
+
+```python
+from j_perm import (
+    # Matchers
+    OpMatcher,
+    AlwaysMatcher,
+
+    # Resolver
+    PointerResolver,
+
+    # Shorthand stages
+    AssertShorthandProcessor,
+    DeleteShorthandProcessor,
+    AssignShorthandProcessor,
+
+    # Factory
+    build_default_engine,
+    build_default_shorthand_stages,
+)
+```
+
+---
+
+## Examples
+
+### Example 1: Data Filtering
+
+```python
+spec = {
+    "op": "foreach",
+    "in": "/products",
+    "do": {
+        "op": "if",
+        "cond": "${?source.item.price < `100`}",
+        "then": {"/affordable[]": "/item"}
+    }
+}
+```
+
+### Example 2: Conditional Copy with Default
+
+```python
+spec = {
+    "/result": {
+        "$ref": "/maybe_missing",
+        "$default": "not found"
+    }
+}
+```
+
+### Example 3: Nested Evaluation
+
+```python
+spec = {
+    "/computed": {
+        "$eval": [
+            {"op": "set", "path": "/x", "value": "${int:/a}"},
+            {"op": "set", "path": "/y", "value": "${int:/b}"},
+            {"op": "replace_root", "value": "${?add(dest.x, dest.y)}"}
+        ]
+    }
+}
+```
+
+### Example 4: Mixed Shorthands
+
+```python
+spec = {
+    "~assert": {"/user/id": 123},
+    "~delete": "/temp",
+    "/output": "/user/name"
+}
 ```
 
 ---
 
 ## License
 
-This package is provided as-is; feel free to adapt it to your project structure.
+MIT (or adapt to your project as needed)
+
+---
+
+## Contributing
+
+Issues and pull requests welcome!
