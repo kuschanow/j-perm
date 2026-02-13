@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "j-perm"
-version = "1.0.0"
+version = "1.1.0"
 description = "json permutation library"
 authors = [
     { name = "Roman", email = "kuschanow@gmail.com" },
@@ -32,6 +32,7 @@ markers = [
 Homepage = "https://github.com/kuschanow/j-perm"
 Source = "https://github.com/kuschanow/j-perm"
 Tracker = "https://github.com/kuschanow/j-perm/issues"
+Documentation = "https://github.com/kuschanow/j-perm"
 
 [tool.setuptools.packages.find]
 where = ["src"]

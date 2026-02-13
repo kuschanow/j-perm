@@ -85,3 +85,76 @@ def eval_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
         return ctx.resolver.get(sel_ptr, result)
 
     return result
+
+
+def and_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$and`` construct: execute multiple actions and merge results.
+
+    Schema::
+
+        {"$and": [<actions>]}
+
+    Behavior:
+    * Each action is executed with the same source and an initially empty dest
+    * Results of all actions are merged (shallow dict merge)
+    * If there are conflicting keys, later actions override earlier ones
+
+    Examples::
+
+        {"$and": [[{"op": "copy", "from": "/a", "path": "/"}], [{"op": "copy", "from": "/b", "path": "/"}]]}
+        {"$and": [[{"op": "assert", "path": "/a", "return": "/"}], [{"op": "copy", "from": "/b", "path": "/"}]]}
+    """
+
+    last_result = None
+    for action in node["$and"]:
+        last_result = ctx.engine.apply(action, source=ctx.source, dest={})
+        if not last_result:
+            return last_result
+    return last_result
+
+
+def or_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$or`` construct: execute multiple actions and return first truthy result.
+
+    Schema::
+
+        {"$or": [<actions>]}
+
+    Behavior:
+    * Each action is executed with the same source and an initially empty dest
+    * Returns the first truthy result among the actions
+    * If all results are falsy, returns the last result
+
+    Examples::
+
+        {"$or": [[{"op": "assert", "path": "/a", "return": True}], [{"op": "copy", "from": "/c", "path": "/"}]]}
+        {"$or": [{"op": "assert", "path": "/a", "return": True}, {"op": "assert", "path": "/b", "return": True}]}
+    """
+
+    last_result = None
+    for action in node["$or"]:
+        last_result = ctx.engine.apply(action, source=ctx.source, dest={})
+        if last_result:
+            return last_result
+    return last_result
+
+
+def not_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$not`` construct: execute a single action and negate its result.
+
+    Schema::
+
+        {"$not": <action>}
+
+    Behavior:
+    * The action is executed with the same source and an initially empty dest
+    * Returns the logical negation of the action's result
+
+    Examples::
+
+        {"$not": [{"op": "assert", "path": "/a", "return": True}]}
+        {"$not": [{"op": "copy", "from": "/a", "path": "/"}]}
+    """
+
+    result = ctx.engine.apply(node["$not"], source=ctx.source, dest={})
+    return not result

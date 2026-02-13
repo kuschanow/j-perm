@@ -256,13 +256,76 @@ class ForeachHandler(ActionHandler):
 
         try:
             for elem in arr:
-                if isinstance(ctx.source, Mapping):
-                    extended = dict(ctx.source)
-                else:
-                    extended = {"_": ctx.source}
-
-                extended[var] = elem
+                extended = {"_": ctx.source, var: elem}
                 ctx.dest = ctx.engine.apply(body, source=extended, dest=ctx.dest)
+        except Exception:
+            # Rollback on error
+            ctx.dest = snapshot
+            raise
+
+        return ctx.dest
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# while — loop with condition
+# ─────────────────────────────────────────────────────────────────────────────
+
+class WhileHandler(ActionHandler):
+    """``op: while`` — loop while condition holds.
+
+    Schema (path-based)::
+
+        {"op": "while", "do": <actions>,
+         "do_while": false, "path": "/check/path",
+         "equals": <expected>, "exists": true}
+
+    Schema (expression-based)::
+        {"op": "while", "do": <actions>, "do_while": false, "cond": <expression>}
+
+    * ``cond`` — expression evaluated as boolean each iteration
+    * ``do`` — actions to execute while condition is true
+
+    If iteration fails, rollback dest to snapshot.
+    """
+
+    def execute(self, step: Any, ctx: ExecutionContext) -> Any:
+        do_while = bool(step.get("do_while", False))
+        snapshot = copy.deepcopy(ctx.dest)
+
+        try:
+            while True:
+                if not do_while:
+                    # Evaluate condition
+                    if "cond" in step:
+                        raw_cond = ctx.engine.process_value(step["cond"], ctx)
+                        cond_val = bool(raw_cond)
+                    elif "path" in step:
+                        try:
+                            ptr = ctx.engine.process_value(step["path"], ctx)
+                            current = ctx.resolver.get(ptr, ctx.dest)
+                            missing = False
+                        except Exception:
+                            current = None
+                            missing = True
+
+                        if "equals" in step:
+                            expected = ctx.engine.process_value(step["equals"], ctx)
+                            cond_val = current == expected and not missing
+                        elif step.get("exists"):
+                            cond_val = not missing
+                        else:
+                            cond_val = bool(current) and not missing
+                    else:
+                        raise ValueError("while operation requires 'cond' or 'path'")
+
+                    if not cond_val:
+                        break
+
+                # Execute body
+                ctx.dest = ctx.engine.apply(step["do"], source=ctx.source, dest=ctx.dest)
+
+                # After first iteration, always check condition
+                do_while = False
         except Exception:
             # Rollback on error
             ctx.dest = snapshot
@@ -546,26 +609,66 @@ class AssertHandler(ActionHandler):
 
     Schema::
 
-        {"op": "assert", "path": "/source/path", "equals": <expected>}
+        {"op": "assert", "path": "/source/path", "equals": <expected>, "return": False, "to_path": <path/to/return>}
+
+    or::
+
+        {"op": "assert", "value": <val>, "equals": <expected>, "return": False, "to_path": <path/to/return>}
 
     * ``path`` — pointer in **source** (template-expanded)
+    * ``value`` — direct value to check (alternative to ``path``)
     * ``equals`` (optional) — expected value
+    * ``return`` (optional) — if specified, return value instead rising error
+    * ``return`` + ``to_path`` → pointer in source to return if assertion fails
+
+    Either ``path`` or ``value`` must be specified, but not both.
 
     Raises ``AssertionError`` if:
-    * Path doesn't exist
+    * Path doesn't exist (when using ``path``)
     * Value doesn't match ``equals``
     """
 
+    def _return_value(self, step: Any, ctx: ExecutionContext, value: Any) -> Any:
+        """Return value directly or set it at destination path."""
+        if "to_path" in step:
+            return ctx.resolver.set(step["to_path"], ctx.dest, value)
+        return value
+
     def execute(self, step: Any, ctx: ExecutionContext) -> Any:
-        path = ctx.engine.process_value(step["path"], ctx)
+        has_path = "path" in step
+        has_value = "value" in step
 
-        try:
-            current = ctx.resolver.get(path, ctx.source)
-        except Exception:
-            raise AssertionError(f"'{path}' does not exist in source")
+        if has_path and has_value:
+            raise ValueError("assert operation cannot have both 'path' and 'value' parameters")
+        if not has_path and not has_value:
+            raise ValueError("assert operation requires either 'path' or 'value' parameter")
 
-        if "equals" in step and current != step["equals"]:
-            raise AssertionError(f"'{path}' != '{step['equals']!r}'")
+        should_return = step.get("return", False)
+
+        # Get current value either from path or direct value
+        if has_value:
+            current = ctx.engine.process_value(step["value"], ctx)
+        else:
+            path = ctx.engine.process_value(step["path"], ctx)
+            try:
+                current = ctx.resolver.get(path, ctx.source)
+            except Exception:
+                # Handle missing value
+                if should_return:
+                    return self._return_value(step, ctx, False)
+                raise AssertionError(f"'{path}' does not exist in source")
+
+        # Check equality if specified
+        if "equals" in step:
+            expected = ctx.engine.process_value(step["equals"], ctx)
+            if current != expected:
+                if should_return:
+                    return self._return_value(step, ctx, False)
+                raise AssertionError(f"Value != {expected!r}")
+
+        # Handle return mode
+        if should_return:
+            return self._return_value(step, ctx, current)
 
         return ctx.dest
 
@@ -579,20 +682,67 @@ class AssertDHandler(ActionHandler):
 
     Schema::
 
-        {"op": "assertD", "path": "/dest/path", "equals": <expected>}
+        {"op": "assertD", "path": "/dest/path", "equals": <expected>, "return": False, "to_path": <path/to/return>}
+
+    or::
+
+        {"op": "assertD", "value": <val>, "equals": <expected>, "return": False, "to_path": <path/to/return>}
+
+    * ``path`` — pointer in **destination** (template-expanded)
+    * ``value`` — direct value to check (alternative to ``path``)
+    * ``equals`` (optional) — expected value
+    * ``return`` (optional) — if specified, return value instead of raising error
+    * ``return`` + ``to_path`` → pointer in destination to return if assertion fails
 
     Like ``assert`` but checks **destination** instead of source.
+
+    Either ``path`` or ``value`` must be specified, but not both.
+
+    Raises ``AssertionError`` if:
+    * Path doesn't exist (when using ``path``)
+    * Value doesn't match ``equals``
     """
 
+    def _return_value(self, step: Any, ctx: ExecutionContext, value: Any) -> Any:
+        """Return value directly or set it at destination path."""
+        if "to_path" in step:
+            return ctx.resolver.set(step["to_path"], ctx.dest, value)
+        return value
+
     def execute(self, step: Any, ctx: ExecutionContext) -> Any:
-        path = ctx.engine.process_value(step["path"], ctx)
+        has_path = "path" in step
+        has_value = "value" in step
 
-        try:
-            current = ctx.resolver.get(path, ctx.dest)
-        except Exception:
-            raise AssertionError(f"'{path}' does not exist in destination")
+        if has_path and has_value:
+            raise ValueError("assertD operation cannot have both 'path' and 'value' parameters")
+        if not has_path and not has_value:
+            raise ValueError("assertD operation requires either 'path' or 'value' parameter")
 
-        if "equals" in step and current != step["equals"]:
-            raise AssertionError(f"'{path}' != '{step['equals']!r}'")
+        should_return = step.get("return", False)
+
+        # Get current value either from path or direct value
+        if has_value:
+            current = ctx.engine.process_value(step["value"], ctx)
+        else:
+            path = ctx.engine.process_value(step["path"], ctx)
+            try:
+                current = ctx.resolver.get(path, ctx.dest)
+            except Exception:
+                # Handle missing value
+                if should_return:
+                    return self._return_value(step, ctx, False)
+                raise AssertionError(f"'{path}' does not exist in destination")
+
+        # Check equality if specified
+        if "equals" in step:
+            expected = ctx.engine.process_value(step["equals"], ctx)
+            if current != expected:
+                if should_return:
+                    return self._return_value(step, ctx, False)
+                raise AssertionError(f"Value != {expected!r}")
+
+        # Handle return mode
+        if should_return:
+            return self._return_value(step, ctx, current)
 
         return ctx.dest

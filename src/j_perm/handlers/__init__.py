@@ -2,20 +2,20 @@
 grouped by logical system.
 
 template   – ``${…}`` substitution + its matcher + unescape function
-special    – special-construct dispatch (``$ref``, ``$eval``, …)
-constructs – built-in special handlers (ref_handler, eval_handler)
+special    – special-construct dispatch (``$ref``, ``$eval``, ``$and``, ``$or``, ``$not``)
+constructs – built-in special handlers (ref_handler, eval_handler, and_handler, or_handler, not_handler)
 container  – recursive descent into lists / dicts
 identity   – scalar pass-through (catch-all)
-ops        – all 12 built-in operation handlers
+ops        – all 13 built-in operation handlers
 """
 
-from .constructs import ref_handler, eval_handler
+from .constructs import ref_handler, eval_handler, and_handler, or_handler, not_handler
 from .container import ContainerMatcher, RecursiveDescentHandler
 from .identity import IdentityHandler
 from .ops import (
     SetHandler, CopyHandler, CopyDHandler,
     DeleteHandler,
-    ForeachHandler, IfHandler, ExecHandler,
+    ForeachHandler, WhileHandler, IfHandler, ExecHandler,
     UpdateHandler, DistinctHandler,
     ReplaceRootHandler,
     AssertHandler, AssertDHandler,
@@ -35,6 +35,9 @@ __all__ = [
     # constructs
     "ref_handler",
     "eval_handler",
+    "and_handler",
+    "or_handler",
+    "not_handler",
     # container
     "ContainerMatcher",
     "RecursiveDescentHandler",
@@ -46,6 +49,7 @@ __all__ = [
     "CopyDHandler",
     "DeleteHandler",
     "ForeachHandler",
+    "WhileHandler",
     "IfHandler",
     "ExecHandler",
     "UpdateHandler",

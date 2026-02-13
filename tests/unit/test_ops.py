@@ -335,6 +335,77 @@ class TestReplaceRootOperation:
         assert result == {"new": "root"}
 
 
+class TestWhileOperation:
+    """Test 'while' operation."""
+
+    def test_while_with_cond(self):
+        """While loop with path-based condition checking dest."""
+        engine = build_default_engine()
+
+        # Use path-based condition to check dest
+        result = engine.apply(
+            [
+                {"op": "set", "path": "/run", "value": True},
+                {"op": "set", "path": "/counter", "value": 0},
+                {
+                    "op": "while",
+                    "path": "/run",
+                    "equals": True,
+                    "do": [
+                        {"op": "set", "path": "/counter", "value": 1},
+                        {"op": "set", "path": "/run", "value": False},
+                    ],
+                },
+            ],
+            source={},
+            dest={},
+        )
+
+        assert result == {"run": False, "counter": 1}
+
+    def test_while_with_path_equals(self):
+        """While loop checking path equality."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            [
+                {"op": "set", "path": "/status", "value": "running"},
+                {"op": "set", "path": "/count", "value": 0},
+                {
+                    "op": "while",
+                    "path": "/status",
+                    "equals": "running",
+                    "do": [
+                        {"op": "set", "path": "/count", "value": 1},
+                        {"op": "set", "path": "/status", "value": "done"},
+                    ],
+                },
+            ],
+            source={},
+            dest={},
+        )
+
+        assert result == {"status": "done", "count": 1}
+
+    def test_while_do_while(self):
+        """While with do_while executes at least once."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {
+                "op": "while",
+                "path": "/never_true",
+                "equals": True,
+                "do_while": True,
+                "do": {"op": "set", "path": "/executed", "value": True},
+            },
+            source={},
+            dest={},
+        )
+
+        assert result == {"executed": True}
+
+
 class TestAssertOperation:
     """Test 'assert' and 'assertD' operations."""
 
@@ -373,6 +444,99 @@ class TestAssertOperation:
 
         assert result == {}
 
+    def test_assert_with_return(self):
+        """Assert with return mode returns value instead of raising."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"op": "assert", "path": "/missing", "return": True},
+            source={},
+            dest={"existing": "data"},
+        )
+
+        assert result == False
+
+    def test_assert_with_return_and_to_path(self):
+        """Assert with return and to_path sets value at destination."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"op": "assert", "path": "/x", "equals": 10, "return": True, "to_path": "/result"},
+            source={"x": 10},
+            dest={},
+        )
+
+        assert result == {"result": 10}
+
+    def test_assert_with_return_on_missing(self):
+        """Assert with return on missing path returns False."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"op": "assert", "path": "/missing", "return": True, "to_path": "/result"},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": False}
+
+    def test_assert_with_value(self):
+        """Assert with direct value instead of path."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"op": "assert", "value": "test", "equals": "test"},
+            source={},
+            dest={},
+        )
+
+        assert result == {}
+
+    def test_assert_value_fails_on_mismatch(self):
+        """Assert with value fails on mismatch."""
+        engine = build_default_engine()
+
+        with pytest.raises(AssertionError, match="Value !="):
+            engine.apply(
+                {"op": "assert", "value": "test", "equals": "other"},
+                source={},
+                dest={},
+            )
+
+    def test_assert_value_with_return(self):
+        """Assert with value and return mode."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"op": "assert", "value": 42, "equals": 42, "return": True, "to_path": "/result"},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": 42}
+
+    def test_assert_requires_path_or_value(self):
+        """Assert requires either path or value."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="requires either 'path' or 'value'"):
+            engine.apply(
+                {"op": "assert", "equals": "test"},
+                source={},
+                dest={},
+            )
+
+    def test_assert_cannot_have_both_path_and_value(self):
+        """Assert cannot have both path and value."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="cannot have both 'path' and 'value'"):
+            engine.apply(
+                {"op": "assert", "path": "/x", "value": "test"},
+                source={},
+                dest={},
+            )
+
     def test_assertd_checks_dest(self):
         """assertD checks destination not source."""
         engine = build_default_engine()
@@ -384,3 +548,39 @@ class TestAssertOperation:
         )
 
         assert result == {"check": "value"}
+
+    def test_assertd_with_return(self):
+        """assertD with return mode."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"op": "assertD", "path": "/missing", "return": True},
+            source={},
+            dest={"existing": "data"},
+        )
+
+        assert result == False
+
+    def test_assertd_with_value(self):
+        """assertD with direct value."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"op": "assertD", "value": "test", "equals": "test"},
+            source={},
+            dest={},
+        )
+
+        assert result == {}
+
+    def test_assertd_value_with_return_and_to_path(self):
+        """assertD with value, return, and to_path."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"op": "assertD", "value": 100, "equals": 100, "return": True, "to_path": "/result"},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": 100}

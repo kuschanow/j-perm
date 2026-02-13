@@ -3,7 +3,7 @@
 A composable JSON transformation DSL with a powerful, extensible architecture.
 
 J-Perm lets you describe data transformations as **executable specifications** — a list of steps that can be applied to input documents. It supports
-JSON Pointer addressing, template interpolation with `${...}` syntax, special constructs (`$ref`, `$eval`), and a rich set of built-in operations.
+JSON Pointer addressing, template interpolation with `${...}` syntax, special constructs (`$ref`, `$eval`, `$and`, `$or`, `$not`), and a rich set of built-in operations.
 
 **Key features:**
 
@@ -125,7 +125,7 @@ from j_perm import build_default_engine
 # Default engine with all built-ins
 engine = build_default_engine()
 
-# Custom specials (None = use defaults: $ref, $eval)
+# Custom specials (None = use defaults: $ref, $eval, $and, $or, $not)
 engine = build_default_engine(
     specials={"$ref": my_ref_handler, "$custom": my_handler},
     casters={"int": lambda x: int(x), "json": lambda x: json.loads(x)},
@@ -261,6 +261,47 @@ Special values are resolved by `SpecialResolveHandler`.
 
 - Executes nested DSL with `dest={}`
 - Optionally selects sub-path from result
+
+#### `$and` — Logical AND with short-circuit
+
+```json
+{
+    "$and": [
+        [{"op": "assert", "path": "/x", "return": true}],
+        [{"op": "copy", "from": "/y", "path": "/"}]
+    ]
+}
+```
+
+- Executes actions in order with empty `dest` for each
+- Returns last result if all are truthy
+- Short-circuits and returns first falsy result
+
+#### `$or` — Logical OR with short-circuit
+
+```json
+{
+    "$or": [
+        [{"op": "assert", "path": "/x", "return": true}],
+        [{"op": "copy", "from": "/y", "path": "/"}]
+    ]
+}
+```
+
+- Executes actions in order with empty `dest` for each
+- Returns first truthy result
+- Returns last result if all are falsy
+
+#### `$not` — Logical negation
+
+```json
+{
+    "$not": [{"op": "assert", "path": "/missing", "return": true}]
+}
+```
+
+- Executes action with empty `dest`
+- Returns logical negation of the result
 
 ---
 
@@ -477,6 +518,42 @@ Iterate over array/mapping.
 
 ---
 
+### `while`
+
+Loop while condition holds.
+
+**Path mode:**
+
+```json
+{
+    "op": "while",
+    "path": "/counter",
+    "equals": 0,
+    // Or "exists": true
+    "do": [
+        ...
+    ],
+    "do_while": false
+    // Execute at least once (default: false)
+}
+```
+
+**Expression mode:**
+
+```json
+{
+    "op": "while",
+    "cond": "${?dest.counter < `10`}",
+    "do": [
+        ...
+    ]
+}
+```
+
+**Note:** Condition is checked against destination state. Use `do_while: true` to execute body at least once before checking condition.
+
+---
+
 ### `if`
 
 Conditional execution.
@@ -597,6 +674,8 @@ Replace entire destination.
 
 Assert value existence/equality.
 
+**Basic usage:**
+
 ```json
 {
     "op": "assert",
@@ -607,13 +686,34 @@ Assert value existence/equality.
 }
 ```
 
+**With direct value:**
+
 ```json
 {
-    "op": "assertD",
-    // Check destination
-    "path": "/expected"
+    "op": "assert",
+    "value": "${?source.computed}",
+    // Check computed value instead of path
+    "equals": "expected"
 }
 ```
+
+**With return mode:**
+
+```json
+{
+    "op": "assert",
+    "path": "/optional",
+    "return": true,
+    // Return value instead of raising error
+    "to_path": "/result"
+    // Optional: write result to destination
+}
+```
+
+- `return: true` — returns value on success, `false` on failure (instead of raising error)
+- `to_path` — destination path for return value
+- `value` — alternative to `path`, checks direct value
+- `assertD` checks **destination** instead of **source**
 
 ---
 
@@ -850,6 +950,9 @@ from j_perm import (
     # Special construct functions
     ref_handler,
     eval_handler,
+    and_handler,
+    or_handler,
+    not_handler,
 
     # Operation handlers
     SetHandler,
@@ -857,6 +960,7 @@ from j_perm import (
     CopyDHandler,
     DeleteHandler,
     ForeachHandler,
+    WhileHandler,
     IfHandler,
     ExecHandler,
     UpdateHandler,

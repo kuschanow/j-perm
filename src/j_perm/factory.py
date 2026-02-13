@@ -23,13 +23,13 @@ from .core import (
     Pipeline,
     UnescapeRule,
 )
-from .handlers.constructs import ref_handler, eval_handler
+from .handlers.constructs import ref_handler, eval_handler, and_handler, or_handler, not_handler
 from .handlers.container import ContainerMatcher, RecursiveDescentHandler
 from .handlers.identity import IdentityHandler
 from .handlers.ops import (
     SetHandler, CopyHandler, CopyDHandler,
     DeleteHandler,
-    ForeachHandler, IfHandler, ExecHandler,
+    ForeachHandler, WhileHandler, IfHandler, ExecHandler,
     UpdateHandler, DistinctHandler,
     ReplaceRootHandler,
     AssertHandler, AssertDHandler,
@@ -60,11 +60,11 @@ def build_default_engine(
             - ``AssertShorthandProcessor``  (priority 100) — ``~assert`` / ``~assertD``
             - ``DeleteShorthandProcessor``  (priority  50) — ``~delete``
             - ``AssignShorthandProcessor``  (priority   0) — fallback ``/path``
-        * Registry: all 12 built-in ops (set, copy, copyD, delete, foreach,
-          if, exec, update, distinct, replace_root, assert, assertD).
+        * Registry: all 13 built-in ops (set, copy, copyD, delete, foreach,
+          while, if, exec, update, distinct, replace_root, assert, assertD).
 
     value_pipeline
-        * ``SpecialResolveHandler``   (priority 10)  – ``$ref``, ``$eval``.
+        * ``SpecialResolveHandler``   (priority 10)  – ``$ref``, ``$eval``, ``$and``, ``$or``, ``$not``.
         * ``TemplSubstHandler``       (priority  8)  – ``${…}`` with built-in
           casters (int, float, bool, str) and JMESPath function (subtract).
         * ``RecursiveDescentHandler`` (priority  5)  – recurse into containers.
@@ -101,6 +101,9 @@ def build_default_engine(
         specials = {
             "$ref": ref_handler,
             "$eval": eval_handler,
+            "$and": and_handler,
+            "$or": or_handler,
+            "$not": not_handler,
         }
 
     # -- value pipeline -----------------------------------------------------
@@ -166,6 +169,11 @@ def build_default_engine(
         name="foreach", priority=10,
         matcher=OpMatcher("foreach"),
         handler=ForeachHandler(),
+    ))
+    main_reg.register(ActionNode(
+        name="while", priority=10,
+        matcher=OpMatcher("while"),
+        handler=WhileHandler(),
     ))
     main_reg.register(ActionNode(
         name="if", priority=10,
