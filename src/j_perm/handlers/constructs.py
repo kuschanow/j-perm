@@ -17,7 +17,7 @@ eval_handler
 from __future__ import annotations
 
 import copy
-from typing import Any, Mapping
+from typing import Any, Mapping, Tuple
 
 from ..core import ExecutionContext
 
@@ -25,7 +25,7 @@ _MISSING = object()
 
 
 def ref_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
-    """``$ref`` construct: resolve pointer from source.
+    """``$ref`` construct: resolve pointer from source or dest.
 
     Schema::
 
@@ -33,15 +33,17 @@ def ref_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
 
     Behavior:
     * Template substitution is applied to the ``$ref`` value itself
-    * Pointer is resolved from ``ctx.source``
-    * Supports slices (``/arr[1:]``) via ``ctx.resolver.get``
+    * Pointer is resolved from ``ctx.source`` by default, or from ``ctx.dest`` if ``$from: "dest"``
+    * Supports prefix syntax: ``@:/path`` for dest, ``_:/path`` for metadata
+    * Supports slices (``/arr[1:]``) via ``ctx.engine.processor.get``
     * Returns deep copy to prevent aliasing
     * If pointer fails and ``$default`` exists → return ``$default``
     * Otherwise raises the original exception
 
     Examples::
 
-        {"$ref": "/user/name"}
+        {"$ref": "/user/name"}                      # from source
+        {"$ref": "@:/user/name"}                    # from dest (prefix syntax)
         {"$ref": "${/path}", "$default": "unknown"}
         {"$ref": "/items[2:]"}
     """
@@ -50,10 +52,10 @@ def ref_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
 
     dflt = node.get("$default", _MISSING)
     try:
-        return copy.deepcopy(ctx.resolver.get(ptr, ctx.source))
+        return copy.deepcopy(ctx.engine.processor.get(ptr, ctx))
     except Exception:
         if dflt is not _MISSING:
-            return copy.deepcopy(dflt)
+            return ctx.engine.process_value(copy.deepcopy(dflt), ctx)
         raise
 
 
@@ -82,7 +84,9 @@ def eval_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
 
     if "$select" in node:
         sel_ptr = ctx.engine.process_value(node["$select"], ctx, _unescape=False)
-        return ctx.resolver.get(sel_ptr, result)
+        # Create temporary context to resolve from eval result
+        temp_ctx = ctx.copy(new_source=result)
+        return ctx.engine.processor.get(sel_ptr, temp_ctx)
 
     return result
 

@@ -21,22 +21,28 @@ from .core import (
     ActionTypeRegistry,
     Engine,
     Pipeline,
-    UnescapeRule,
+    UnescapeRule
 )
-from .handlers.constructs import ref_handler, eval_handler, and_handler, or_handler, not_handler
+from .handlers.constructs import (
+    ref_handler, eval_handler, and_handler, or_handler, not_handler,
+)
 from .handlers.container import ContainerMatcher, RecursiveDescentHandler
+from .handlers.function import (
+    DefMatcher, CallMatcher, DefHandler, CallHandler,
+    RaiseMatcher, RaiseHandler
+)
 from .handlers.identity import IdentityHandler
 from .handlers.ops import (
-    SetHandler, CopyHandler, CopyDHandler,
+    SetHandler, CopyHandler,
     DeleteHandler,
     ForeachHandler, WhileHandler, IfHandler, ExecHandler,
     UpdateHandler, DistinctHandler,
-    ReplaceRootHandler,
-    AssertHandler, AssertDHandler,
+    AssertHandler,
 )
 from .handlers.special import SpecialFn, SpecialMatcher, SpecialResolveHandler
 from .handlers.template import TemplMatcher, TemplSubstHandler, template_unescape
 from .matchers import AlwaysMatcher, OpMatcher
+from .pointer_processor import PointerProcessor
 from .resolvers.pointer import PointerResolver
 from .stages.shorthands import build_default_shorthand_stages
 
@@ -57,16 +63,16 @@ def build_default_engine(
 
     main_pipeline
         * Stages:
-            - ``AssertShorthandProcessor``  (priority 100) — ``~assert`` / ``~assertD``
+            - ``AssertShorthandProcessor``  (priority 100) — ``~assert``
             - ``DeleteShorthandProcessor``  (priority  50) — ``~delete``
             - ``AssignShorthandProcessor``  (priority   0) — fallback ``/path``
-        * Registry: all 13 built-in ops (set, copy, copyD, delete, foreach,
-          while, if, exec, update, distinct, replace_root, assert, assertD).
+        * Registry: all 12 built-in ops (set, copy, delete, foreach, while, if, exec, update, distinct, assert, def, func).
 
     value_pipeline
         * ``SpecialResolveHandler``   (priority 10)  – ``$ref``, ``$eval``, ``$and``, ``$or``, ``$not``.
         * ``TemplSubstHandler``       (priority  8)  – ``${…}`` with built-in
-          casters (int, float, bool, str) and JMESPath function (subtract).
+          casters (int, float, bool, str), JMESPath function (subtract), and
+          dest pointer (@:/path).
         * ``RecursiveDescentHandler`` (priority  5)  – recurse into containers.
         * ``IdentityHandler``         (priority -999, catch-all).
 
@@ -76,7 +82,7 @@ def build_default_engine(
 
     Args:
         specials:        Custom special-construct handlers.  ``None`` → uses
-                         defaults (``{"$ref": ref_handler, "$eval": eval_handler}``).
+                         defaults (``{"$ref": ref_handler, "$eval": eval_handler, "$and": and_handler, "$or": or_handler, "$not": not_handler}``).
         casters:         Custom template casters.  ``None`` → uses built-in
         jmes_options:    Custom JMESPath options for template handler.  ``None`` → uses built-in with subtract function.
         value_max_depth: Stabilisation-loop iteration cap.
@@ -95,6 +101,7 @@ def build_default_engine(
         # → {"name": "Alice", "age": "30"}
     """
     resolver = PointerResolver()
+    processor = PointerProcessor()
 
     # -- default specials ---------------------------------------------------
     if specials is None:
@@ -116,6 +123,17 @@ def build_default_engine(
             matcher=SpecialMatcher(special_keys),
             handler=SpecialResolveHandler(specials),
         ))
+
+    value_reg.register(ActionNode(
+        name="function", priority=9,
+        matcher=CallMatcher(),
+        handler=CallHandler(),
+    ))
+    value_reg.register(ActionNode(
+        name="raise", priority=9,
+        matcher=RaiseMatcher(),
+        handler=RaiseHandler(),
+    ))
 
     value_reg.register(ActionNode(
         name="template", priority=8,
@@ -156,11 +174,6 @@ def build_default_engine(
         handler=CopyHandler(set_handler),
     ))
     main_reg.register(ActionNode(
-        name="copyD", priority=10,
-        matcher=OpMatcher("copyD"),
-        handler=CopyDHandler(set_handler),
-    ))
-    main_reg.register(ActionNode(
         name="delete", priority=10,
         matcher=OpMatcher("delete"),
         handler=DeleteHandler(),
@@ -196,19 +209,24 @@ def build_default_engine(
         handler=DistinctHandler(),
     ))
     main_reg.register(ActionNode(
-        name="replace_root", priority=10,
-        matcher=OpMatcher("replace_root"),
-        handler=ReplaceRootHandler(),
-    ))
-    main_reg.register(ActionNode(
         name="assert", priority=10,
         matcher=OpMatcher("assert"),
         handler=AssertHandler(),
     ))
     main_reg.register(ActionNode(
-        name="assertD", priority=10,
-        matcher=OpMatcher("assertD"),
-        handler=AssertDHandler(),
+        name="def", priority=10,
+        matcher=DefMatcher(),
+        handler=DefHandler(),
+    ))
+    main_reg.register(ActionNode(
+        name="func", priority=10,
+        matcher=CallMatcher(),
+        handler=CallHandler(),
+    ))
+    main_reg.register(ActionNode(
+        name="raise", priority=10,
+        matcher=RaiseMatcher(),
+        handler=RaiseHandler(),
     ))
 
     main_pipeline = Pipeline(stages=main_stages, registry=main_reg)
@@ -221,6 +239,7 @@ def build_default_engine(
     # -- engine -------------------------------------------------------------
     return Engine(
         resolver=resolver,
+        processor=processor,
         main_pipeline=main_pipeline,
         value_pipeline=value_pipeline,
         value_max_depth=value_max_depth,

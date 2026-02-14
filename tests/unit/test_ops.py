@@ -112,22 +112,6 @@ class TestCopyOperation:
             )
 
 
-class TestCopyDOperation:
-    """Test 'copyD' operation."""
-
-    def test_copyd_within_dest(self):
-        """Copy within destination."""
-        engine = build_default_engine()
-
-        result = engine.apply(
-            {"op": "copyD", "from": "/a", "path": "/b"},
-            source={},
-            dest={"a": "value"},
-        )
-
-        assert result == {"a": "value", "b": "value"}
-
-
 class TestDeleteOperation:
     """Test 'delete' operation."""
 
@@ -204,7 +188,7 @@ class TestIfOperation:
         engine = build_default_engine()
 
         result = engine.apply(
-            {"op": "if", "path": "/check", "exists": True, "then": {"/result": "yes"}},
+            {"op": "if", "path": "@:/check", "exists": True, "then": {"/result": "yes"}},
             source={},
             dest={"check": True},
         )
@@ -319,22 +303,6 @@ class TestDistinctOperation:
         assert result == {"arr": [3, 1, 2]}
 
 
-class TestReplaceRootOperation:
-    """Test 'replace_root' operation."""
-
-    def test_replace_root(self):
-        """Replace entire destination."""
-        engine = build_default_engine()
-
-        result = engine.apply(
-            {"op": "replace_root", "value": {"new": "root"}},
-            source={},
-            dest={"old": "data"},
-        )
-
-        assert result == {"new": "root"}
-
-
 class TestWhileOperation:
     """Test 'while' operation."""
 
@@ -349,7 +317,7 @@ class TestWhileOperation:
                 {"op": "set", "path": "/counter", "value": 0},
                 {
                     "op": "while",
-                    "path": "/run",
+                    "path": "@:/run",
                     "equals": True,
                     "do": [
                         {"op": "set", "path": "/counter", "value": 1},
@@ -373,7 +341,7 @@ class TestWhileOperation:
                 {"op": "set", "path": "/count", "value": 0},
                 {
                     "op": "while",
-                    "path": "/status",
+                    "path": "@:/status",
                     "equals": "running",
                     "do": [
                         {"op": "set", "path": "/count", "value": 1},
@@ -537,50 +505,3 @@ class TestAssertOperation:
                 dest={},
             )
 
-    def test_assertd_checks_dest(self):
-        """assertD checks destination not source."""
-        engine = build_default_engine()
-
-        result = engine.apply(
-            {"op": "assertD", "path": "/check"},
-            source={},
-            dest={"check": "value"},
-        )
-
-        assert result == {"check": "value"}
-
-    def test_assertd_with_return(self):
-        """assertD with return mode."""
-        engine = build_default_engine()
-
-        result = engine.apply(
-            {"op": "assertD", "path": "/missing", "return": True},
-            source={},
-            dest={"existing": "data"},
-        )
-
-        assert result == False
-
-    def test_assertd_with_value(self):
-        """assertD with direct value."""
-        engine = build_default_engine()
-
-        result = engine.apply(
-            {"op": "assertD", "value": "test", "equals": "test"},
-            source={},
-            dest={},
-        )
-
-        assert result == {}
-
-    def test_assertd_value_with_return_and_to_path(self):
-        """assertD with value, return, and to_path."""
-        engine = build_default_engine()
-
-        result = engine.apply(
-            {"op": "assertD", "value": 100, "equals": 100, "return": True, "to_path": "/result"},
-            source={},
-            dest={},
-        )
-
-        assert result == {"result": 100}

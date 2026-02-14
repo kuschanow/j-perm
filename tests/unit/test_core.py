@@ -16,6 +16,7 @@ from j_perm import (
     PointerResolver,
     UnescapeRule,
 )
+from j_perm.pointer_processor import PointerProcessor
 
 
 class TestExecutionContext:
@@ -30,13 +31,11 @@ class TestExecutionContext:
             source={"a": 1},
             dest={"b": 2},
             engine=engine,
-            resolver=resolver,
         )
 
         assert ctx.source == {"a": 1}
         assert ctx.dest == {"b": 2}
         assert ctx.engine is engine
-        assert ctx.resolver is resolver
         assert ctx.metadata == {}
 
     def test_metadata_default(self):
@@ -45,7 +44,6 @@ class TestExecutionContext:
             source={},
             dest={},
             engine=object(),
-            resolver=PointerResolver(),
         )
 
         assert isinstance(ctx.metadata, dict)
@@ -57,11 +55,126 @@ class TestExecutionContext:
             source={},
             dest={},
             engine=object(),
-            resolver=PointerResolver(),
         )
 
         ctx.metadata["key"] = "value"
         assert ctx.metadata["key"] == "value"
+
+    def test_copy_basic(self):
+        """copy() creates a new context with same values by default."""
+        engine = object()
+        resolver = PointerResolver()
+        ctx = ExecutionContext(
+            source={"a": 1},
+            dest={"b": 2},
+            engine=engine,
+            metadata={"key": "value"},
+        )
+
+        ctx2 = ctx.copy()
+
+        assert ctx2.source is ctx.source
+        assert ctx2.dest is ctx.dest
+        assert ctx2.engine is ctx.engine
+        assert ctx2.metadata is ctx.metadata
+
+    def test_copy_with_new_source(self):
+        """copy() can override source."""
+        ctx = ExecutionContext(
+            source={"a": 1},
+            dest={"b": 2},
+            engine=object(),
+        )
+
+        ctx2 = ctx.copy(new_source={"c": 3})
+
+        assert ctx2.source == {"c": 3}
+        assert ctx2.dest is ctx.dest
+
+    def test_copy_with_deepcopy_source(self):
+        """copy() can deepcopy source."""
+        ctx = ExecutionContext(
+            source={"a": {"nested": "value"}},
+            dest={},
+            engine=object(),
+        )
+
+        ctx2 = ctx.copy(deepcopy_source=True)
+
+        assert ctx2.source == ctx.source
+        assert ctx2.source is not ctx.source
+        assert ctx2.source["a"] is not ctx.source["a"]
+
+    def test_copy_with_new_dest(self):
+        """copy() can override dest."""
+        ctx = ExecutionContext(
+            source={},
+            dest={"b": 2},
+            engine=object(),
+        )
+
+        ctx2 = ctx.copy(new_dest={"d": 4})
+
+        assert ctx2.dest == {"d": 4}
+        assert ctx2.source is ctx.source
+
+    def test_copy_with_deepcopy_dest(self):
+        """copy() can deepcopy dest."""
+        ctx = ExecutionContext(
+            source={},
+            dest={"a": {"nested": "value"}},
+            engine=object(),
+        )
+
+        ctx2 = ctx.copy(deepcopy_dest=True)
+
+        assert ctx2.dest == ctx.dest
+        assert ctx2.dest is not ctx.dest
+        assert ctx2.dest["a"] is not ctx.dest["a"]
+
+    def test_copy_with_new_engine(self):
+        """copy() can override engine."""
+        engine1 = object()
+        engine2 = object()
+        ctx = ExecutionContext(
+            source={},
+            dest={},
+            engine=engine1,
+        )
+
+        ctx2 = ctx.copy(new_engine=engine2)
+
+        assert ctx2.engine is engine2
+        assert ctx.engine is engine1
+
+    def test_copy_with_new_metadata(self):
+        """copy() can override metadata."""
+        ctx = ExecutionContext(
+            source={},
+            dest={},
+            engine=object(),
+            metadata={"key": "value"},
+        )
+
+        ctx2 = ctx.copy(new_metadata={"new_key": "new_value"})
+
+        assert ctx2.metadata == {"new_key": "new_value"}
+        assert ctx.metadata == {"key": "value"}
+
+    def test_copy_with_deepcopy_metadata(self):
+        """copy() can deepcopy metadata."""
+        ctx = ExecutionContext(
+            source={},
+            dest={},
+            engine=object(),
+            metadata={"key": {"nested": "value"}},
+        )
+
+        ctx2 = ctx.copy(deepcopy_metadata=True)
+
+        assert ctx2.metadata == ctx.metadata
+        assert ctx2.metadata is not ctx.metadata
+        assert ctx2.metadata["key"] is not ctx.metadata["key"]
 
 
 class TestStageRegistry:
@@ -71,7 +184,7 @@ class TestStageRegistry:
         """Empty registry should return input as-is."""
         registry = StageRegistry()
         engine = object()
-        ctx = ExecutionContext({}, {}, engine, PointerResolver())
+        ctx = ExecutionContext(source={}, dest={}, engine=engine)
 
         result = registry.run_all([1, 2, 3], ctx)
         assert result == [1, 2, 3]
@@ -89,7 +202,7 @@ class TestStageRegistry:
         )
 
         engine = object()
-        ctx = ExecutionContext({}, {}, engine, PointerResolver())
+        ctx = ExecutionContext(source={}, dest={}, engine=engine)
         result = registry.run_all([1, 2, 3], ctx)
 
         assert result == [2, 4, 6]
@@ -114,7 +227,7 @@ class TestStageRegistry:
         registry.register(StageNode("mid", priority=50, processor=RecordStage("mid")))
 
         engine = object()
-        ctx = ExecutionContext({}, {}, engine, PointerResolver())
+        ctx = ExecutionContext(source={}, dest={}, engine=engine)
         registry.run_all([], ctx)
 
         assert executed == ["high", "mid", "low"]
@@ -136,7 +249,7 @@ class TestStageRegistry:
         )
 
         engine = object()
-        ctx = ExecutionContext({}, {}, engine, PointerResolver())
+        ctx = ExecutionContext(source={}, dest={}, engine=engine)
 
         # Odd length - should not run
         result = registry.run_all([1, 2, 3], ctx)
@@ -259,7 +372,7 @@ class TestPipeline:
         """Pipeline with empty registry should raise on any step."""
         pipeline = Pipeline()
         engine = object()
-        ctx = ExecutionContext({}, {}, engine, PointerResolver())
+        ctx = ExecutionContext(source={}, dest={}, engine=engine)
 
         with pytest.raises(ValueError, match="unhandled step"):
             pipeline.run({"op": "test"}, ctx)
@@ -283,7 +396,7 @@ class TestPipeline:
 
         pipeline = Pipeline(registry=registry)
         engine = object()
-        ctx = ExecutionContext({}, {}, engine, PointerResolver())
+        ctx = ExecutionContext(source={}, dest={}, engine=engine)
 
         pipeline.run({"op": "test"}, ctx)
         assert ctx.dest == {"executed": True}
@@ -314,7 +427,7 @@ class TestPipeline:
 
         pipeline = Pipeline(stages=stages, registry=registry)
         engine = object()
-        ctx = ExecutionContext({}, {}, engine, PointerResolver())
+        ctx = ExecutionContext(source={}, dest={}, engine=engine)
 
         pipeline.run({}, ctx)
         assert executed_order == ["stage", "handler"]
@@ -341,6 +454,7 @@ class TestEngine:
         pipeline = Pipeline(registry=registry)
         engine = Engine(
             resolver=PointerResolver(),
+            processor=PointerProcessor(),
             main_pipeline=pipeline,
         )
 
@@ -369,11 +483,85 @@ class TestEngine:
         pipeline = Pipeline(registry=registry)
         engine = Engine(
             resolver=PointerResolver(),
+            processor=PointerProcessor(),
             main_pipeline=pipeline,
             value_pipeline=None,
         )
 
-        ctx = ExecutionContext({}, {}, engine, PointerResolver())
+        ctx = ExecutionContext(source={}, dest={}, engine=engine)
         result = engine.process_value("test", ctx)
 
         assert result == "test"
+
+    def test_apply_to_context_mutates_context_in_place(self):
+        """apply_to_context() mutates the provided context's dest."""
+
+        class SetHandler(ActionHandler):
+            def execute(self, step, ctx):
+                ctx.dest["key"] = "value"
+                return ctx.dest
+
+        class AlwaysMatcher(ActionMatcher):
+            def matches(self, step):
+                return True
+
+        registry = ActionTypeRegistry()
+        registry.register(ActionNode("set", 10, AlwaysMatcher(), handler=SetHandler()))
+
+        pipeline = Pipeline(registry=registry)
+        engine = Engine(
+            resolver=PointerResolver(),
+            processor=PointerProcessor(),
+            main_pipeline=pipeline,
+        )
+
+        ctx = ExecutionContext(
+            source={},
+            dest={},
+            engine=engine,
+        )
+
+        result = engine.apply_to_context({}, ctx)
+
+        # The context's dest was mutated
+        assert ctx.dest == {"key": "value"}
+        # apply_to_context returns deep copy
+        assert result == {"key": "value"}
+        assert result is not ctx.dest
+
+    def test_apply_to_context_uses_provided_context(self):
+        """apply_to_context() uses the provided context's source and dest."""
+
+        class CopyHandler(ActionHandler):
+            def execute(self, step, ctx):
+                ctx.dest["from_source"] = ctx.source.get("data", "missing")
+                ctx.dest["from_dest"] = ctx.dest.get("existing", "missing")
+                return ctx.dest
+
+        class AlwaysMatcher(ActionMatcher):
+            def matches(self, step):
+                return True
+
+        registry = ActionTypeRegistry()
+        registry.register(ActionNode("copy", 10, AlwaysMatcher(), handler=CopyHandler()))
+
+        pipeline = Pipeline(registry=registry)
+        engine = Engine(
+            resolver=PointerResolver(),
+            processor=PointerProcessor(),
+            main_pipeline=pipeline,
+        )
+
+        ctx = ExecutionContext(
+            source={"data": "source_value"},
+            dest={"existing": "dest_value"},
+            engine=engine,
+        )
+
+        result = engine.apply_to_context({}, ctx)
+
+        assert result == {
+            "from_source": "source_value",
+            "from_dest": "dest_value",
+            "existing": "dest_value",
+        }

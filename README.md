@@ -5,14 +5,6 @@ A composable JSON transformation DSL with a powerful, extensible architecture.
 J-Perm lets you describe data transformations as **executable specifications** — a list of steps that can be applied to input documents. It supports
 JSON Pointer addressing, template interpolation with `${...}` syntax, special constructs (`$ref`, `$eval`, `$and`, `$or`, `$not`), and a rich set of built-in operations.
 
-**Key features:**
-
-- 🎯 **Declarative** — transformations are data, not code
-- 🔌 **Pluggable architecture** — stages, handlers, matchers form a composable pipeline
-- 🌳 **Hierarchical registries** — organize operations and value processors in trees
-- 📦 **Self-contained** — zero dependencies on external registries
-- 🎨 **Shorthand syntax** — write concise scripts that expand to full operations
-
 ---
 
 ## Quick Example
@@ -177,6 +169,60 @@ resolver.set("/items/-", data, "new")  # Append to list
 
 **Key feature:** Unlike standard JSON Pointer, `PointerResolver` works on **any type** (scalars, lists, dicts) for root references.
 
+#### Data Source Prefixes
+
+J-Perm supports **prefixes** to specify which context to read from:
+
+| Prefix | Source | Description |
+|--------|--------|-------------|
+| `/path` | **source** | Default - read from source context |
+| `@:/path` | **dest** | Read from destination being built |
+| `_:/path` | **metadata** | Read from execution metadata |
+
+**Example: Accessing destination in templates**
+
+```python
+# Build incrementally, referencing previous values
+spec = [
+    {"/name": "Alice"},
+    {"/greeting": "Hello, ${@:/name}!"}  # Reference dest value
+]
+
+result = engine.apply(spec, source={}, dest={})
+# → {"name": "Alice", "greeting": "Hello, Alice!"}
+```
+
+**Example: Comparing source vs dest**
+
+```python
+spec = [
+    {"/dest_value": "from_dest"},
+    {"/comparison": "Source: ${/source_value}, Dest: ${@:/dest_value}"}
+]
+
+result = engine.apply(
+    spec,
+    source={"source_value": "from_source"},
+    dest={}
+)
+# → {"dest_value": "from_dest", "comparison": "Source: from_source, Dest: from_dest"}
+```
+
+**Example: Using in conditionals**
+
+```python
+# Check destination state in conditions
+spec = [
+    {"/status": "ready"},
+    {
+        "op": "if",
+        "path": "@:/status",
+        "equals": "ready",
+        "then": [{"/message": "System is ready"}]
+    }
+]
+```
+
 ---
 
 ### 2. Template Interpolation (`${...}`)
@@ -305,11 +351,131 @@ Special values are resolved by `SpecialResolveHandler`.
 
 ---
 
-### 4. Shorthand Syntax
+### 4. Functions and Error Handling
+
+J-Perm supports defining reusable functions and controlled error handling.
+
+#### `$def` — Define a function
+
+```json
+{
+    "$def": "myFunction",
+    "params": ["arg1", "arg2"],
+    "body": [
+        {"/result": "${arg1}"},
+        {"/total": "${int:${arg2}}"}
+    ],
+    "return": "/total",
+    "on_failure": [
+        {"/error": "Function failed"}
+    ]
+}
+```
+
+- `params` — list of parameter names (optional, default: [])
+- `body` — actions to execute when function is called
+- `return` — path in local context to return (optional, default: entire dest)
+- `on_failure` — error handler actions (optional)
+
+**Special variable `_`:** Inside function body, the original source is accessible via `/_/path`:
+
+```json
+{
+    "$def": "getFromSource",
+    "body": [{"/value": {"$ref": "/_/data"}}]
+}
+```
+
+When called, functions can access:
+- **Parameters** via `/${param_name}`
+- **Original source** via `/_/path` (source from engine.apply)
+- **Current dest** via `@:/path`
+
+Example:
+
+```python
+spec = [
+    {
+        "$def": "combineData",
+        "params": ["userInput"],
+        "body": [
+            {"/input": "${userInput}"},
+            {"/global": {"$ref": "/_/config"}},  # From original source
+            {"/result": "Input: ${@:/input}, Config: ${@:/global/setting}"}
+        ],
+        "return": "/result"
+    },
+    {"/output": {"$func": "combineData", "args": ["test"]}}
+]
+
+result = engine.apply(
+    spec,
+    source={"config": {"setting": "production"}},
+    dest={}
+)
+# → {"output": "Input: test, Config: production"}
+```
+
+#### `$func` — Call a function
+
+```json
+{
+    "$func": "myFunction",
+    "args": [10, 20]
+}
+```
+
+- `args` — list of arguments to pass (optional, default: [])
+
+Functions are stored in the execution context metadata and can be called multiple times within the same transformation.
+
+#### `$raise` — Raise an error
+
+```json
+{
+    "$raise": "Invalid data: ${/error_details}"
+}
+```
+
+Raises a `JPermError` with the specified message. The error can be:
+- Caught by `on_failure` handlers in function definitions
+- Used for validation and control flow
+- Combined with templates for dynamic error messages
+
+**Example with error handling:**
+
+```json
+[
+    {
+        "$def": "validateAge",
+        "params": ["age"],
+        "body": [
+            {
+                "op": "if",
+                "cond": {"$not": [{"op": "assert", "value": "${int:${age}}", "return": true}]},
+                "then": [{"$raise": "Age must be a number"}]
+            },
+            {
+                "op": "if",
+                "cond": "${?source.age < `0`}",
+                "then": [{"$raise": "Age cannot be negative"}]
+            }
+        ],
+        "on_failure": [
+            {"/validation_error": "@:/"}
+        ]
+    },
+    {"/result": {"$func": "validateAge", "args": [25]}}
+]
+```
+
+---
+
+### 5. Shorthand Syntax
 
 Shorthands are expanded by **priority-ordered StageProcessors** before execution.
 
-#### `~assert` / `~assertD`
+#### `~assert`
 
 ```json
 {
@@ -418,7 +584,7 @@ Expands to:
 }
 ```
 
-**Priority order:** `~assert` (100) → `~delete` (50) → `assign/copy` (0)
+**Priority order:** `~assert` (100) → `~delete` (50) → pointer/literal assignment (0)
 
 ---
 
@@ -464,20 +630,6 @@ Copy value from source to destination.
 
 ---
 
-### `copyD`
-
-Copy within destination (self-copy).
-
-```json
-{
-    "op": "copyD",
-    "from": "/dest/src",
-    "path": "/dest/target"
-}
-```
-
----
-
 ### `delete`
 
 Remove value at path.
@@ -515,6 +667,42 @@ Iterate over array/mapping.
 ```
 
 **Note:** If source is a dict, iterates over `(key, value)` tuples.
+
+**Special variable `_`:** Inside foreach body, you can access:
+- **Current item** via `/${var}` (e.g., `/item`)
+- **Original source** via `/_/path` (source from engine.apply)
+- **Current dest** via `@:/path`
+
+Example:
+
+```python
+# Enrich items with global config from source
+spec = {
+    "op": "foreach",
+    "in": "/products",
+    "as": "product",
+    "do": {
+        "/results[]": {
+            "$eval": [
+                {"/name": "${product/name}"},
+                {"/price": "${product/price}"},
+                {"/tax_rate": {"$ref": "/_/config/tax"}},  # From original source
+                {"/total": "${?source.price * source.tax_rate}"}
+            ]
+        }
+    }
+}
+
+result = engine.apply(
+    spec,
+    source={
+        "products": [{"name": "A", "price": 100}, {"name": "B", "price": 200}],
+        "config": {"tax": 1.2}
+    },
+    dest={}
+)
+# → {"results": [{"name": "A", "price": 100, "tax_rate": 1.2, "total": 120}, ...]}
+```
 
 ---
 
@@ -655,22 +843,7 @@ Remove duplicates from list.
 
 ---
 
-### `replace_root`
-
-Replace entire destination.
-
-```json
-{
-    "op": "replace_root",
-    "value": {
-        "new": "root"
-    }
-}
-```
-
----
-
-### `assert` / `assertD`
+### `assert`
 
 Assert value existence/equality.
 
@@ -713,7 +886,6 @@ Assert value existence/equality.
 - `return: true` — returns value on success, `false` on failure (instead of raising error)
 - `to_path` — destination path for return value
 - `value` — alternative to `path`, checks direct value
-- `assertD` checks **destination** instead of **source**
 
 ---
 
@@ -878,7 +1050,7 @@ main_registry.register_group(
 
 **Shorthands:**
 
-1. `AssertShorthandProcessor` (100) — extracts `~assert`, `~assertD`
+1. `AssertShorthandProcessor` (100) — extracts `~assert`
 2. `DeleteShorthandProcessor` (50) — extracts `~delete`
 3. `AssignShorthandProcessor` (0) — fallback for all remaining keys
 
@@ -954,10 +1126,18 @@ from j_perm import (
     or_handler,
     not_handler,
 
+    # Function handlers
+    DefMatcher,
+    CallMatcher,
+    DefHandler,
+    CallHandler,
+    RaiseMatcher,
+    RaiseHandler,
+    JPermError,
+
     # Operation handlers
     SetHandler,
     CopyHandler,
-    CopyDHandler,
     DeleteHandler,
     ForeachHandler,
     WhileHandler,
@@ -965,9 +1145,7 @@ from j_perm import (
     ExecHandler,
     UpdateHandler,
     DistinctHandler,
-    ReplaceRootHandler,
     AssertHandler,
-    AssertDHandler,
 )
 ```
 
@@ -1029,9 +1207,9 @@ spec = {
     "/computed": {
         "$eval": [
             {"op": "set", "path": "/x", "value": "${int:/a}"},
-            {"op": "set", "path": "/y", "value": "${int:/b}"},
-            {"op": "replace_root", "value": "${?add(dest.x, dest.y)}"}
-        ]
+            {"op": "set", "path": "/y", "value": "${int:/b}"}
+        ],
+        "$select": "${?add(dest.x, dest.y)}"
     }
 }
 ```
@@ -1039,11 +1217,53 @@ spec = {
 ### Example 4: Mixed Shorthands
 
 ```python
-spec = {
-    "~assert": {"/user/id": 123},
-    "~delete": "/temp",
-    "/output": "/user/name"
-}
+spec = [
+    {"~assert": {"/user/id": 123}},
+    {"~delete": "/temp"},
+    {"/output": "/user/name"}
+]
+```
+
+### Example 5: Functions with Error Handling
+
+```python
+spec = [
+    # Define a validation function with error recovery
+    {
+        "$def": "validateAge",
+        "params": ["age"],
+        "body": [
+            # Validate age is a number
+            {
+                "op": "if",
+                "cond": {"$not": [{"op": "assert", "value": "${int:${age}}", "return": True}]},
+                "then": [{"$raise": "Age must be a number"}]
+            },
+            # Validate age is positive
+            {
+                "op": "if",
+                "cond": "${?source.age < `0`}",
+                "then": [{"$raise": "Age cannot be negative: ${age}"}]
+            },
+            {"/valid": True}
+        ],
+        "return": "/valid",
+        "on_failure": [
+            # Capture the error in dest
+            {"/validation_failed": True},
+            {"/last_error": "Validation error occurred"}
+        ]
+    },
+    # Use function to validate user input
+    {"/user_age_valid": {"$func": "validateAge", "args": [25]}},
+    # Access dest values with @: prefix
+    {
+        "op": "if",
+        "path": "@:/validation_failed",
+        "equals": True,
+        "then": [{"/message": "Please check your input: ${@:/last_error}"}]
+    }
+]
 ```
 
 ---

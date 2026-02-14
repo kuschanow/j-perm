@@ -59,7 +59,6 @@ class TestTemplSubstHandler:
             source={"user": {"name": "Alice"}},
             dest={},
             engine=engine,
-            resolver=PointerResolver(),
         )
 
         result = handler.execute("${/user/name}", ctx)
@@ -76,7 +75,6 @@ class TestTemplSubstHandler:
             source={"age": "30"},
             dest={},
             engine=engine,
-            resolver=PointerResolver(),
         )
 
         # Note: single expression returns native type
@@ -94,7 +92,6 @@ class TestTemplSubstHandler:
             source={"first": "Alice", "last": "Smith"},
             dest={},
             engine=engine,
-            resolver=PointerResolver(),
         )
 
         result = handler.execute("${/first} ${/last}", ctx)
@@ -107,7 +104,7 @@ class TestTemplSubstHandler:
 
         from j_perm import ExecutionContext, PointerResolver
 
-        ctx = ExecutionContext(source={}, dest={}, engine=engine, resolver=PointerResolver())
+        ctx = ExecutionContext(source={}, dest={}, engine=engine)
 
         result = handler.execute("$${literal}", ctx)
         assert result == "$${literal}"

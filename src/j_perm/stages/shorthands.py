@@ -60,7 +60,7 @@ class AssertShorthandMatcher(StageMatcher):
 
 
 class AssertShorthandProcessor(StageProcessor):
-    """Extract and expand ``~assert`` / ``~assertD`` keys from shorthand dicts.
+    """Extract and expand ``~assert`` keys from shorthand dicts.
 
     Expansion rules:
     * Value is a mapping  → each entry becomes ``{op, path, equals}``
@@ -78,15 +78,14 @@ class AssertShorthandProcessor(StageProcessor):
                 remaining = {}
 
                 for key, value in step.items():
-                    if key in ("~assert", "~assertD"):
-                        op = "assertD" if key == "~assertD" else "assert"
+                    if key == "~assert":
                         if isinstance(value, Mapping):
                             expanded.extend(
-                                [{"op": op, "path": p, "equals": eq} for p, eq in value.items()]
+                                [{"op": "assert", "path": p, "equals": eq} for p, eq in value.items()]
                             )
                         else:
                             paths = value if isinstance(value, list) else [value]
-                            expanded.extend([{"op": op, "path": p} for p in paths])
+                            expanded.extend([{"op": "assert", "path": p} for p in paths])
                     else:
                         remaining[key] = value
 
@@ -170,6 +169,11 @@ class AssignShorthandProcessor(StageProcessor):
         out: List[Any] = []
         for step in steps:
             if isinstance(step, Mapping) and "op" not in step:
+                # Skip steps with special constructs (e.g., $def, $func, $ref, etc.)
+                if any(key.startswith("$") for key in step.keys()):
+                    out.append(step)
+                    continue
+
                 if not step:
                     # Empty dict after all extractions — skip it
                     continue

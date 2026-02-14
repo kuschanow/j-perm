@@ -42,8 +42,8 @@ class SetHandler(ActionHandler):
 
     def execute(self, step: Any, ctx: ExecutionContext) -> Any:
         path = ctx.engine.process_value(step["path"], ctx)
-        create = bool(step.get("create", True))
-        extend_list = bool(step.get("extend", True))
+        create = bool(ctx.engine.process_value(step.get("create", True), ctx))
+        extend_list = bool(ctx.engine.process_value(step.get("extend", True), ctx))
 
         value = ctx.engine.process_value(step["value"], ctx)
 
@@ -53,13 +53,13 @@ class SetHandler(ActionHandler):
 
             # Try to get parent
             try:
-                parent = ctx.resolver.get(parent_path, ctx.dest)
+                parent = ctx.engine.processor.get("@:" + parent_path, ctx)
             except Exception:
                 # Parent doesn't exist
                 if create:
-                    # Create parent as empty list
-                    ctx.dest = ctx.resolver.set(parent_path, ctx.dest, [])
-                    parent = ctx.resolver.get(parent_path, ctx.dest)
+                    # Create parent as empty list (set always writes to dest)
+                    ctx.engine.processor.set(parent_path, ctx, [])
+                    parent = ctx.engine.processor.get("@:" + parent_path, ctx)
                 else:
                     raise
 
@@ -68,10 +68,10 @@ class SetHandler(ActionHandler):
                 if create:
                     # Convert to list (wrap value if not empty)
                     if parent == {}:
-                        ctx.dest = ctx.resolver.set(parent_path, ctx.dest, [])
+                        ctx.engine.processor.set(parent_path, ctx, [])
                     else:
-                        ctx.dest = ctx.resolver.set(parent_path, ctx.dest, [parent])
-                    parent = ctx.resolver.get(parent_path, ctx.dest)
+                        ctx.engine.processor.set(parent_path, ctx, [parent])
+                    parent = ctx.engine.processor.get("@:" + parent_path, ctx)
                 else:
                     raise TypeError(f"{path}: parent is not a list (append)")
 
@@ -81,8 +81,8 @@ class SetHandler(ActionHandler):
             else:
                 parent.append(value)
         else:
-            # Normal set
-            ctx.dest = ctx.resolver.set(path, ctx.dest, value)
+            # Normal set (set always writes to dest)
+            ctx.engine.processor.set(path, ctx, value)
 
         return ctx.dest
 
@@ -113,17 +113,17 @@ class CopyHandler(ActionHandler):
 
     def execute(self, step: Any, ctx: ExecutionContext) -> Any:
         path = ctx.engine.process_value(step["path"], ctx)
-        create = bool(step.get("create", True))
-        extend_list = bool(step.get("extend", True))
+        create = bool(ctx.engine.process_value(step.get("create", True), ctx))
+        extend_list = bool(ctx.engine.process_value(step.get("extend", True), ctx))
 
         ptr = ctx.engine.process_value(step["from"], ctx)
-        ignore = bool(step.get("ignore_missing", False))
+        ignore = bool(ctx.engine.process_value(step.get("ignore_missing", False), ctx))
 
         try:
-            value = copy.deepcopy(ctx.resolver.get(ptr, ctx.source))
+            value = copy.deepcopy(ctx.engine.processor.get(ptr, ctx))
         except Exception:
             if "default" in step:
-                value = copy.deepcopy(step["default"])
+                value = copy.deepcopy(ctx.engine.process_value(step["default"], ctx))
             elif ignore:
                 return ctx.dest
             else:
@@ -133,47 +133,6 @@ class CopyHandler(ActionHandler):
         return self._set.execute(
             {"op": "set", "path": path, "value": value,
              "create": create, "extend": extend_list},
-            ctx
-        )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# copyD — copy from dest (self) to another dest path
-# ─────────────────────────────────────────────────────────────────────────────
-
-class CopyDHandler(ActionHandler):
-    """``op: copyD`` — copy value within destination.
-
-    Schema::
-
-        {"op": "copyD", "from": "/dest/src", "path": "/dest/target",
-         "create": true, "ignore_missing": false, "default": <fallback>}
-
-    Like ``copy`` but reads from ``ctx.dest`` instead of ``ctx.source``.
-    """
-
-    def __init__(self, set_handler: SetHandler | None = None) -> None:
-        self._set = set_handler or SetHandler()
-
-    def execute(self, step: Any, ctx: ExecutionContext) -> Any:
-        path = ctx.engine.process_value(step["path"], ctx)
-        create = bool(step.get("create", True))
-
-        ptr = ctx.engine.process_value(step["from"], ctx)
-        ignore = bool(step.get("ignore_missing", False))
-
-        try:
-            value = copy.deepcopy(ctx.resolver.get(ptr, ctx.dest))
-        except Exception:
-            if "default" in step:
-                value = copy.deepcopy(step["default"])
-            elif ignore:
-                return ctx.dest
-            else:
-                raise
-
-        return self._set.execute(
-            {"op": "set", "path": path, "value": value, "create": create},
             ctx
         )
 
@@ -196,14 +155,14 @@ class DeleteHandler(ActionHandler):
 
     def execute(self, step: Any, ctx: ExecutionContext) -> Any:
         path = ctx.engine.process_value(step["path"], ctx)
-        ignore = bool(step.get("ignore_missing", True))
+        ignore = bool(ctx.engine.process_value(step.get("ignore_missing", True), ctx))
 
         # Validate no '-'
         if path.endswith("/-"):
             raise ValueError("'-' not allowed in delete")
 
         try:
-            ctx.dest = ctx.resolver.delete(path, ctx.dest)
+            ctx.engine.processor.delete(path, ctx, ignore_missing=ignore)
         except (KeyError, IndexError):
             if not ignore:
                 raise
@@ -236,11 +195,11 @@ class ForeachHandler(ActionHandler):
     def execute(self, step: Any, ctx: ExecutionContext) -> Any:
         arr_ptr = ctx.engine.process_value(step["in"], ctx)
 
-        default = copy.deepcopy(step.get("default", []))
-        skip_empty = bool(step.get("skip_empty", True))
+        default = copy.deepcopy(ctx.engine.process_value(step.get("default", []), ctx))
+        skip_empty = bool(ctx.engine.process_value(step.get("skip_empty", True), ctx))
 
         try:
-            arr = ctx.resolver.get(arr_ptr, ctx.source)
+            arr = ctx.engine.processor.get(arr_ptr, ctx)
         except Exception:
             arr = default
 
@@ -250,7 +209,7 @@ class ForeachHandler(ActionHandler):
         if isinstance(arr, dict):
             arr = list(arr.items())
 
-        var = step.get("as", "item")
+        var = ctx.engine.process_value(step.get("as", "item"), ctx)
         body = step["do"]
         snapshot = copy.deepcopy(ctx.dest)
 
@@ -289,7 +248,7 @@ class WhileHandler(ActionHandler):
     """
 
     def execute(self, step: Any, ctx: ExecutionContext) -> Any:
-        do_while = bool(step.get("do_while", False))
+        do_while = bool(ctx.engine.process_value(step.get("do_while", False), ctx))
         snapshot = copy.deepcopy(ctx.dest)
 
         try:
@@ -302,7 +261,7 @@ class WhileHandler(ActionHandler):
                     elif "path" in step:
                         try:
                             ptr = ctx.engine.process_value(step["path"], ctx)
-                            current = ctx.resolver.get(ptr, ctx.dest)
+                            current = ctx.engine.processor.get(ptr, ctx)
                             missing = False
                         except Exception:
                             current = None
@@ -311,7 +270,7 @@ class WhileHandler(ActionHandler):
                         if "equals" in step:
                             expected = ctx.engine.process_value(step["equals"], ctx)
                             cond_val = current == expected and not missing
-                        elif step.get("exists"):
+                        elif ctx.engine.process_value(step.get("exists", False), ctx):
                             cond_val = not missing
                         else:
                             cond_val = bool(current) and not missing
@@ -365,7 +324,7 @@ class IfHandler(ActionHandler):
         if "path" in step:
             try:
                 ptr = ctx.engine.process_value(step["path"], ctx)
-                current = ctx.resolver.get(ptr, ctx.dest)
+                current = ctx.engine.processor.get(ptr, ctx)
                 missing = False
             except Exception:
                 current = None
@@ -374,7 +333,7 @@ class IfHandler(ActionHandler):
             if "equals" in step:
                 expected = ctx.engine.process_value(step["equals"], ctx)
                 cond_val = current == expected and not missing
-            elif step.get("exists"):
+            elif ctx.engine.process_value(step.get("exists", False), ctx):
                 cond_val = not missing
             else:
                 cond_val = bool(current) and not missing
@@ -434,7 +393,7 @@ class ExecHandler(ActionHandler):
         if has_from:
             actions_ptr = ctx.engine.process_value(step["from"], ctx)
             try:
-                actions = ctx.resolver.get(actions_ptr, ctx.source)
+                actions = ctx.engine.processor.get(actions_ptr, ctx)
             except Exception:
                 if "default" in step:
                     actions = ctx.engine.process_value(step["default"], ctx)
@@ -443,7 +402,7 @@ class ExecHandler(ActionHandler):
         else:
             actions = ctx.engine.process_value(step["actions"], ctx)
 
-        merge = bool(step.get("merge", False))
+        merge = bool(ctx.engine.process_value(step.get("merge", False), ctx))
 
         if merge:
             return ctx.engine.apply(actions, source=ctx.source, dest=ctx.dest)
@@ -479,16 +438,16 @@ class UpdateHandler(ActionHandler):
 
     def execute(self, step: Any, ctx: ExecutionContext) -> Any:
         path = ctx.engine.process_value(step["path"], ctx)
-        create = bool(step.get("create", True))
-        deep = bool(step.get("deep", False))
+        create = bool(ctx.engine.process_value(step.get("create", True), ctx))
+        deep = bool(ctx.engine.process_value(step.get("deep", False), ctx))
 
         if "from" in step:
             ptr = ctx.engine.process_value(step["from"], ctx)
             try:
-                update_value = copy.deepcopy(ctx.resolver.get(ptr, ctx.source))
+                update_value = copy.deepcopy(ctx.engine.processor.get(ptr, ctx))
             except Exception:
                 if "default" in step:
-                    update_value = copy.deepcopy(step["default"])
+                    update_value = copy.deepcopy(ctx.engine.process_value(step["default"], ctx))
                 else:
                     raise
         elif "value" in step:
@@ -500,17 +459,14 @@ class UpdateHandler(ActionHandler):
             raise TypeError(f"update value must be a dict, got {type(update_value).__name__}")
 
         # Get target
-        if path in ("", "/", "."):
-            target = ctx.dest
-        else:
-            try:
-                target = ctx.resolver.get(path, ctx.dest)
-            except Exception:
-                if create:
-                    ctx.dest = ctx.resolver.set(path, ctx.dest, {})
-                    target = ctx.resolver.get(path, ctx.dest)
-                else:
-                    raise KeyError(f"{path} does not exist")
+        try:
+            target = ctx.engine.processor.get("@:" + path, ctx)
+        except Exception:
+            if create:
+                ctx.engine.processor.set(path, ctx, {})
+                target = ctx.engine.processor.get("@:" + path, ctx)
+            else:
+                raise KeyError(f"{path} does not exist")
 
         if not isinstance(target, Mapping):
             raise TypeError(f"{path} is not a dict, cannot update")
@@ -549,7 +505,7 @@ class DistinctHandler(ActionHandler):
 
     def execute(self, step: Any, ctx: ExecutionContext) -> Any:
         path = ctx.engine.process_value(step["path"], ctx)
-        lst = ctx.resolver.get(path, ctx.dest)
+        lst = ctx.engine.processor.get("@:" + path, ctx)
 
         if not isinstance(lst, list):
             raise TypeError(f"{path} is not a list (distinct)")
@@ -562,7 +518,7 @@ class DistinctHandler(ActionHandler):
         unique = []
         for item in lst:
             if key is not None:
-                filter_item = ctx.resolver.get(key_path, item)
+                filter_item = ctx.engine.resolver.get(key_path, item)
             else:
                 filter_item = item
 
@@ -577,27 +533,6 @@ class DistinctHandler(ActionHandler):
 
         lst[:] = unique
         return ctx.dest
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# replace_root — replace entire dest
-# ─────────────────────────────────────────────────────────────────────────────
-
-class ReplaceRootHandler(ActionHandler):
-    """``op: replace_root`` — replace entire destination with new value.
-
-    Schema::
-
-        {"op": "replace_root", "value": <new_root>}
-
-    * ``value`` — new root (special-resolved + template-expanded)
-
-    Returns deep copy of the resolved value.
-    """
-
-    def execute(self, step: Any, ctx: ExecutionContext) -> Any:
-        value = ctx.engine.process_value(step["value"], ctx)
-        return copy.deepcopy(value)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -631,7 +566,7 @@ class AssertHandler(ActionHandler):
     def _return_value(self, step: Any, ctx: ExecutionContext, value: Any) -> Any:
         """Return value directly or set it at destination path."""
         if "to_path" in step:
-            return ctx.resolver.set(step["to_path"], ctx.dest, value)
+            return ctx.engine.resolver.set(ctx.engine.process_value(step["to_path"], ctx), ctx.dest, value)
         return value
 
     def execute(self, step: Any, ctx: ExecutionContext) -> Any:
@@ -643,7 +578,7 @@ class AssertHandler(ActionHandler):
         if not has_path and not has_value:
             raise ValueError("assert operation requires either 'path' or 'value' parameter")
 
-        should_return = step.get("return", False)
+        should_return = ctx.engine.process_value(step.get("return", False), ctx)
 
         # Get current value either from path or direct value
         if has_value:
@@ -651,87 +586,12 @@ class AssertHandler(ActionHandler):
         else:
             path = ctx.engine.process_value(step["path"], ctx)
             try:
-                current = ctx.resolver.get(path, ctx.source)
+                current = ctx.engine.processor.get(path, ctx)
             except Exception:
                 # Handle missing value
                 if should_return:
                     return self._return_value(step, ctx, False)
                 raise AssertionError(f"'{path}' does not exist in source")
-
-        # Check equality if specified
-        if "equals" in step:
-            expected = ctx.engine.process_value(step["equals"], ctx)
-            if current != expected:
-                if should_return:
-                    return self._return_value(step, ctx, False)
-                raise AssertionError(f"Value != {expected!r}")
-
-        # Handle return mode
-        if should_return:
-            return self._return_value(step, ctx, current)
-
-        return ctx.dest
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# assertD — validate dest value
-# ─────────────────────────────────────────────────────────────────────────────
-
-class AssertDHandler(ActionHandler):
-    """``op: assertD`` — assert value exists in destination.
-
-    Schema::
-
-        {"op": "assertD", "path": "/dest/path", "equals": <expected>, "return": False, "to_path": <path/to/return>}
-
-    or::
-
-        {"op": "assertD", "value": <val>, "equals": <expected>, "return": False, "to_path": <path/to/return>}
-
-    * ``path`` — pointer in **destination** (template-expanded)
-    * ``value`` — direct value to check (alternative to ``path``)
-    * ``equals`` (optional) — expected value
-    * ``return`` (optional) — if specified, return value instead of raising error
-    * ``return`` + ``to_path`` → pointer in destination to return if assertion fails
-
-    Like ``assert`` but checks **destination** instead of source.
-
-    Either ``path`` or ``value`` must be specified, but not both.
-
-    Raises ``AssertionError`` if:
-    * Path doesn't exist (when using ``path``)
-    * Value doesn't match ``equals``
-    """
-
-    def _return_value(self, step: Any, ctx: ExecutionContext, value: Any) -> Any:
-        """Return value directly or set it at destination path."""
-        if "to_path" in step:
-            return ctx.resolver.set(step["to_path"], ctx.dest, value)
-        return value
-
-    def execute(self, step: Any, ctx: ExecutionContext) -> Any:
-        has_path = "path" in step
-        has_value = "value" in step
-
-        if has_path and has_value:
-            raise ValueError("assertD operation cannot have both 'path' and 'value' parameters")
-        if not has_path and not has_value:
-            raise ValueError("assertD operation requires either 'path' or 'value' parameter")
-
-        should_return = step.get("return", False)
-
-        # Get current value either from path or direct value
-        if has_value:
-            current = ctx.engine.process_value(step["value"], ctx)
-        else:
-            path = ctx.engine.process_value(step["path"], ctx)
-            try:
-                current = ctx.resolver.get(path, ctx.dest)
-            except Exception:
-                # Handle missing value
-                if should_return:
-                    return self._return_value(step, ctx, False)
-                raise AssertionError(f"'{path}' does not exist in destination")
 
         # Check equality if specified
         if "equals" in step:

@@ -46,11 +46,9 @@ class TestBuildDefaultEngine:
         ops = [
             {"op": "set", "path": "/x", "value": 1},
             {"op": "copy", "from": "/x", "path": "/y"},
-            {"op": "copyD", "from": "/x", "path": "/z"},
             {"op": "delete", "path": "/z"},
             {"op": "update", "path": "/obj", "value": {}},
             {"op": "distinct", "path": "/arr"},
-            {"op": "replace_root", "value": {"new": "root"}},
             {"op": "assert", "path": "/x"},
         ]
 
@@ -65,7 +63,7 @@ class TestBuildDefaultEngine:
                 dest = {"obj": {}}
             elif op_spec["op"] == "distinct":
                 dest = {"arr": [1, 2]}
-            elif op_spec["op"] in ("copy", "copyD"):
+            elif op_spec["op"] == "copy":
                 dest = {"x": "val"}
             else:
                 dest = {}

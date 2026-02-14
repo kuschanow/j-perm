@@ -30,7 +30,7 @@ from .core import (
     ActionTypeRegistry,
     Pipeline,
     Engine,
-    UnescapeRule,
+    UnescapeRule
 )
 # -- factory -------------------------------------------------------
 from .factory import build_default_engine
@@ -58,7 +58,6 @@ from .handlers import (
     # ops
     SetHandler,
     CopyHandler,
-    CopyDHandler,
     DeleteHandler,
     ForeachHandler,
     WhileHandler,
@@ -66,9 +65,15 @@ from .handlers import (
     ExecHandler,
     UpdateHandler,
     DistinctHandler,
-    ReplaceRootHandler,
     AssertHandler,
-    AssertDHandler,
+    # function
+    DefMatcher,
+    CallMatcher,
+    DefHandler,
+    CallHandler,
+    RaiseMatcher,
+    RaiseHandler,
+    JPermError,
 )
 # -- shared matchers -----------------------------------------------
 from .matchers import (
@@ -87,6 +92,8 @@ from .stages import (
     AssignShorthandProcessor,
     build_default_shorthand_stages,
 )
+# -- pointer processor ------------------------------------------------
+from .pointer_processor import PointerProcessor
 
 __all__ = [
     # core
@@ -133,7 +140,6 @@ __all__ = [
     "IdentityHandler",
     "SetHandler",
     "CopyHandler",
-    "CopyDHandler",
     "DeleteHandler",
     "ForeachHandler",
     "WhileHandler",
@@ -141,11 +147,18 @@ __all__ = [
     "ExecHandler",
     "UpdateHandler",
     "DistinctHandler",
-    "ReplaceRootHandler",
     "AssertHandler",
-    "AssertDHandler",
+    "DefMatcher",
+    "CallMatcher",
+    "DefHandler",
+    "CallHandler",
+    "RaiseMatcher",
+    "RaiseHandler",
+    "JPermError",
     # resolvers
     "PointerResolver",
     # factory
     "build_default_engine",
+    # pointer processor
+    "PointerProcessor",
 ]

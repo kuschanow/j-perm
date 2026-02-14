@@ -27,7 +27,10 @@ from __future__ import annotations
 import copy
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, List, Optional, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .pointer_processor import PointerProcessor
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -57,9 +60,8 @@ class ExecutionContext:
         source:   Read-only input document (normalised at Engine.apply time).
         dest:     The document being built; mutated by each handler in sequence.
         engine:   Back-reference to the owning Engine (gives access to
-                  ``process_value``, ``run_pipeline``, etc.).
-        resolver: The active ValueResolver — same for all stages/handlers in
-                  this context.
+                  ``process_value``, ``run_pipeline``, ``engine.resolver``,
+                  ``engine.processor``, etc.).
         metadata: Arbitrary dict for passing side-channel data between
                   stages/middlewares/handlers within one ``apply`` call.
     """
@@ -67,8 +69,29 @@ class ExecutionContext:
     source: Any
     dest: Any
     engine: 'Engine'
-    resolver: 'ValueResolver'
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def copy(
+            self,
+            deepcopy_source: bool = False,
+            new_source: Any = None,
+            deepcopy_dest: bool = False,
+            new_dest: Any = None,
+            new_engine: Optional['Engine'] = None,
+            deepcopy_metadata: bool = False,
+            new_metadata: Optional[dict[str, Any]] = None,
+    ) -> ExecutionContext:
+        """Return a copy of this context with optional overrides.
+
+        Used by Engine.run_pipeline to create an isolated sub-context for the
+        nested pipeline.
+        """
+        return ExecutionContext(
+            source=new_source if new_source is not None else (copy.deepcopy(self.source) if deepcopy_source else self.source),
+            dest=new_dest if new_dest is not None else (copy.deepcopy(self.dest) if deepcopy_dest else self.dest),
+            engine=new_engine if new_engine is not None else self.engine,
+            metadata=new_metadata if new_metadata is not None else (copy.deepcopy(self.metadata) if deepcopy_metadata else self.metadata),
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -540,18 +563,23 @@ class Engine:
             self,
             *,
             resolver: ValueResolver,
+            processor: PointerProcessor,
             main_pipeline: Pipeline,
             value_pipeline: Optional[Pipeline] = None,
             value_max_depth: int = 50,
             pipelines: Optional[dict[str, Pipeline]] = None,
             unescape_rules: Optional[List[UnescapeRule]] = None,
+            custom_functions: Optional[dict[str, Callable]] = None,
     ) -> None:
         self.resolver = resolver
+        self.processor = processor
         self.main_pipeline = main_pipeline
         self.value_pipeline = value_pipeline
         self.value_max_depth = value_max_depth
         self._pipelines = dict(pipelines) if pipelines else {}
         self._unescape_rules = sorted(unescape_rules or [], key=lambda r: r.priority, reverse=True)
+        for name, func in (custom_functions or {}).items():
+            setattr(self, name, func)
 
     # -- registration -------------------------------------------------------
 
@@ -559,12 +587,16 @@ class Engine:
         """Register a named pipeline (callable via ``run_pipeline``)."""
         self._pipelines[name] = pipeline
 
+    def register_custom_function(self, name: str, func: Callable[[Any], Any]) -> None:
+        """Add a custom function as an Engine method (callable from handlers)."""
+        setattr(self, name, func)
+
     # -- public API ---------------------------------------------------------
 
     def apply(self, spec: Any, *, source: Any, dest: Any) -> Any:
         """Execute a DSL script through *main_pipeline*.
 
-        *source* is normalised (tuples → lists for JMESPath compatibility).
+        *source* is normalized (tuples → lists for JMESPath compatibility).
         *dest* is deep-copied before processing; the return value is another
         deep copy so the caller's original is never touched.
         """
@@ -572,8 +604,16 @@ class Engine:
             source=_tuples_to_lists(source),
             dest=copy.deepcopy(dest),
             engine=self,
-            resolver=self.resolver,
         )
+        self.main_pipeline.run(spec, ctx)
+        return copy.deepcopy(ctx.dest)
+
+    def apply_to_context(self, spec: Any, ctx: ExecutionContext) -> Any:
+        """Like ``apply``, but takes a pre-constructed context and mutates it in-place.
+
+        The caller is responsible for normalizing the source and deep-copying
+        the dest if necessary.  Returns None; the result lives in ``ctx.dest``.
+        """
         self.main_pipeline.run(spec, ctx)
         return copy.deepcopy(ctx.dest)
 
@@ -594,7 +634,6 @@ class Engine:
             source=ctx.source,
             dest=copy.deepcopy(ctx.dest),
             engine=self,
-            resolver=self.resolver,
         )
         self._pipelines[name].run(spec, sub_ctx)
         return copy.deepcopy(sub_ctx.dest)
@@ -625,7 +664,6 @@ class Engine:
                 source=ctx.source,
                 dest=current,
                 engine=self,
-                resolver=self.resolver,
                 metadata=metadata_with_dest,
             )
             self.value_pipeline.run([current], value_ctx)

@@ -71,7 +71,6 @@ class TestRefHandler:
         # Source should be unchanged
         assert source["data"]["mutable"] == "value"
 
-
 class TestEvalHandler:
     """Test $eval special construct."""
 
@@ -333,3 +332,95 @@ class TestNotHandler:
 
         # Action doesn't see outer dest
         assert result == {"outer": "value", "result": False}
+
+
+class TestDestPointer:
+    """Test @:/path syntax for accessing dest in templates."""
+
+    def test_dest_pointer_simple_path(self):
+        """@:/path resolves pointer from dest."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            [
+                {"/data": "value"},
+                {"/result": "${@:/data}"},
+            ],
+            source={},
+            dest={},
+        )
+
+        assert result == {"data": "value", "result": "value"}
+
+    def test_dest_pointer_nested_path(self):
+        """@:/path with nested path."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            [
+                {"/user/name": "Alice"},
+                {"/result": "${@:/user/name}"},
+            ],
+            source={},
+            dest={},
+        )
+
+        assert result == {"user": {"name": "Alice"}, "result": "Alice"}
+
+    def test_dest_pointer_returns_none_on_missing(self):
+        """@:/path returns None if path is missing."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": "${@:/missing}"},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": None}
+
+    def test_dest_pointer_in_concatenation(self):
+        """@:/path can be used in string concatenation."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            [
+                {"/name": "Alice"},
+                {"/greeting": "Hello, ${@:/name}!"},
+            ],
+            source={},
+            dest={},
+        )
+
+        assert result == {"name": "Alice", "greeting": "Hello, Alice!"}
+
+    def test_dest_pointer_with_slice(self):
+        """@:/path supports array slices."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            [
+                {"/items": [1, 2, 3, 4, 5]},
+                {"/result": "${@:/items[2:]}"},
+            ],
+            source={},
+            dest={},
+        )
+
+        assert result == {"items": [1, 2, 3, 4, 5], "result": [3, 4, 5]}
+
+    def test_dest_pointer_vs_source_pointer(self):
+        """@:/path reads from dest, regular /path reads from source."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            [
+                {"/dest_value": "from_dest"},
+                {"/comparison": "Source: ${/source_value}, Dest: ${@:/dest_value}"},
+            ],
+            source={"source_value": "from_source"},
+            dest={},
+        )
+
+        assert result["comparison"] == "Source: from_source, Dest: from_dest"
+

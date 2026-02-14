@@ -80,8 +80,6 @@ class TestComplexScenarios:
             {"/contact/email": "/input/email"},
             # Add derived field
             {"op": "set", "path": "/contact/age_group", "value": "adult"},
-            # Assert result
-            {"~assertD": {"/name": "Alice Smith"}},
         ]
 
         result = engine.apply(spec, source=source, dest={})
