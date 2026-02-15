@@ -606,3 +606,122 @@ class AssertHandler(ActionHandler):
             return self._return_value(step, ctx, current)
 
         return ctx.dest
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# try — error handling with except and finally blocks
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TryHandler(ActionHandler):
+    """``op: try`` — execute actions with error handling.
+
+    Schema::
+
+        {
+            "op": "try",
+            "do": <actions>,
+            "except": <error_handlers>,  // optional
+            "finally": <cleanup_actions>,  // optional
+        }
+
+    Behavior:
+    * Executes actions in ``do`` block
+    * If an error occurs:
+        - If ``except`` is specified, executes error handlers with error info in metadata
+        - If ``except`` is not specified, re-raises the error
+    * Always executes ``finally`` block if specified (even if error occurred)
+    * Returns the final dest
+
+    Metadata during except block:
+    * ``_error_type``: The error class name (e.g., "ValueError")
+    * ``_error_message``: The error message string
+
+    Examples::
+
+        # Basic try-except
+        {
+            "op": "try",
+            "do": [
+                {"op": "copy", "from": "/might_not_exist", "path": "/result"}
+            ],
+            "except": [
+                {"/error": "Failed to copy value"}
+            ]
+        }
+
+        # With finally cleanup
+        {
+            "op": "try",
+            "do": [
+                {"/status": "processing"},
+                {"op": "exec", "from": "/dangerous_operation"}
+            ],
+            "except": [
+                {"/status": "error"},
+                {"/error_msg": "${_:/error_message}"}
+            ],
+            "finally": [
+                {"/processed_at": "${now}"}
+            ]
+        }
+
+        # Without except (finally always runs)
+        {
+            "op": "try",
+            "do": [
+                {"op": "copy", "from": "/data", "path": "/backup"}
+            ],
+            "finally": [
+                {"/cleanup": True}
+            ]
+        }
+    """
+
+    def execute(self, step: Any, ctx: ExecutionContext) -> Any:
+        """Execute try-except-finally logic."""
+        do_actions = step.get("do")
+        except_actions = step.get("except")
+        finally_actions = step.get("finally")
+
+        if do_actions is None:
+            raise ValueError("try operation requires 'do' parameter")
+
+        error_occurred = False
+        error_info = None
+
+        # Try to execute the main actions
+        try:
+            ctx.engine.apply_to_context(do_actions, ctx)
+        except Exception as e:
+            error_occurred = True
+            error_info = {
+                "_error_type": type(e).__name__,
+                "_error_message": str(e),
+            }
+
+            # If except block exists, execute it with error info in metadata
+            if except_actions is not None:
+                # Save current metadata and add error info
+                old_metadata = ctx.metadata.copy()
+                ctx.metadata.update(error_info)
+
+                try:
+                    ctx.engine.apply_to_context(except_actions, ctx)
+                finally:
+                    # Restore original metadata
+                    ctx.metadata = old_metadata
+            else:
+                # No except block, re-raise the error
+                # But first execute finally if it exists
+                if finally_actions is not None:
+                    try:
+                        ctx.engine.apply_to_context(finally_actions, ctx)
+                    except Exception:
+                        pass  # Ignore errors in finally when re-raising original error
+                raise
+
+        # Always execute finally block if specified
+        if finally_actions is not None:
+            ctx.engine.apply_to_context(finally_actions, ctx)
+
+        return ctx.dest

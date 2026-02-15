@@ -52,6 +52,7 @@ from .handlers.ops import (
     ForeachHandler, WhileHandler, IfHandler, ExecHandler,
     UpdateHandler, DistinctHandler,
     AssertHandler,
+    TryHandler,
 )
 from .handlers.special import SpecialFn, SpecialMatcher, SpecialResolveHandler
 from .handlers.template import TemplMatcher, TemplSubstHandler, template_unescape
@@ -80,7 +81,7 @@ def build_default_engine(
             - ``AssertShorthandProcessor``  (priority 100) — ``~assert``
             - ``DeleteShorthandProcessor``  (priority  50) — ``~delete``
             - ``AssignShorthandProcessor``  (priority   0) — fallback ``/path``
-        * Registry: all 12 built-in ops (set, copy, delete, foreach, while, if, exec, update, distinct, assert, def, func).
+        * Registry: all 13 built-in ops (set, copy, delete, foreach, while, if, exec, update, distinct, assert, try, def, func).
 
     value_pipeline
         * ``SpecialResolveHandler``   (priority 10)  – ``$ref``, ``$eval``, ``$cast``,
@@ -263,6 +264,11 @@ def build_default_engine(
         name="assert", priority=10,
         matcher=OpMatcher("assert"),
         handler=AssertHandler(),
+    ))
+    main_reg.register(ActionNode(
+        name="try", priority=10,
+        matcher=OpMatcher("try"),
+        handler=TryHandler(),
     ))
     main_reg.register(ActionNode(
         name="def", priority=10,

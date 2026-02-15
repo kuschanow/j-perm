@@ -1,14 +1,14 @@
-"""PointerProcessor - обработчик JSON pointers с поддержкой префиксов источников данных.
+"""PointerProcessor - JSON pointer handler with data source prefix support.
 
-Поддерживаемые префиксы:
-    @:/path  - доступ к dest (или _real_dest из metadata)
-    _:/path  - доступ к metadata
-    /path    - доступ к source (по умолчанию)
+Supported prefixes:
+    @:/path  - access dest (or _real_dest from metadata)
+    _:/path  - access metadata
+    /path    - access source (default)
 
-Примеры:
-    processor.get("@:/user/name", ctx)  # читает из ctx.dest
-    processor.get("_:/config", ctx)      # читает из ctx.metadata
-    processor.get("/data", ctx)          # читает из ctx.source
+Examples:
+    processor.get("@:/user/name", ctx)  # reads from ctx.dest
+    processor.get("_:/config", ctx)      # reads from ctx.metadata
+    processor.get("/data", ctx)          # reads from ctx.source
 """
 
 from __future__ import annotations
@@ -21,17 +21,17 @@ if TYPE_CHECKING:
 
 
 class PointerProcessor:
-    """Обрабатывает указатели с префиксами и делегирует вызовы ValueResolver."""
+    """Processes pointers with prefixes and delegates calls to ValueResolver."""
 
     def resolve(self, path: str, ctx: ExecutionContext) -> Tuple[str, Any]:
-        """Разрешает путь с префиксом и возвращает нормализованный путь и источник данных.
+        """Resolves path with prefix and returns normalized path and data source.
 
         Args:
-            path: Путь с возможным префиксом (@:/, _:/, или обычный /)
-            ctx: Контекст выполнения
+            path: Path with optional prefix (@:/, _:/, or plain /)
+            ctx: Execution context
 
         Returns:
-            Кортеж (нормализованный_путь, объект_данных)
+            Tuple of (normalized_path, data_object)
 
         Examples:
             "@:/user/name" -> ("/user/name", ctx.dest)
@@ -42,7 +42,7 @@ class PointerProcessor:
             # Dest pointer
             normalized = path[2:].lstrip("/")
             normalized = "/" + normalized if normalized else "/"
-            # Используем _real_dest из metadata если доступен (для вложенных value контекстов)
+            # Use _real_dest from metadata if available (for nested value contexts)
             data_source = ctx.metadata.get('_real_dest', ctx.dest)
             return normalized, data_source
 
@@ -53,21 +53,21 @@ class PointerProcessor:
             return normalized, ctx.metadata
 
         else:
-            # Source pointer (по умолчанию)
+            # Source pointer (default)
             return path, ctx.source
 
     def get(self, pointer: str, ctx: ExecutionContext) -> Any:
-        """Получает значение по указателю с учетом префикса.
+        """Gets value by pointer with prefix support.
 
         Args:
-            pointer: JSON pointer с возможным префиксом
-            ctx: Контекст выполнения
+            pointer: JSON pointer with optional prefix
+            ctx: Execution context
 
         Returns:
-            Значение по указанному пути
+            Value at the specified path
 
         Raises:
-            KeyError: Если путь не существует
+            KeyError: If path does not exist
         """
         processed_path, data_source = self.resolve(pointer, ctx)
         return ctx.engine.resolver.get(processed_path, data_source)
@@ -78,18 +78,18 @@ class PointerProcessor:
         ctx: ExecutionContext,
         value: Any
     ) -> None:
-        """Устанавливает значение по указателю в dest.
+        """Sets value by pointer in dest.
 
         Args:
-            pointer: JSON pointer (префиксы игнорируются - всегда пишет в dest)
-            ctx: Контекст выполнения
-            value: Значение для установки
+            pointer: JSON pointer (prefixes ignored - always writes to dest)
+            ctx: Execution context
+            value: Value to set
 
         Note:
-            Операции записи всегда выполняются в ctx.dest, т.к. source неизменяем.
-            Префиксы @:/, _:/ игнорируются.
+            Write operations always execute in ctx.dest, as source is immutable.
+            Prefixes @:/, _:/ are ignored.
         """
-        # Убираем префикс если есть (set всегда в dest)
+        # Remove prefix if present (set always to dest)
         clean_path = pointer
         if pointer.startswith("@:/") or pointer.startswith("@:"):
             clean_path = "/" + pointer[2:].lstrip("/")
@@ -104,42 +104,42 @@ class PointerProcessor:
         ctx: ExecutionContext,
         ignore_missing: bool = False
     ) -> None:
-        """Удаляет значение по указателю из dest.
+        """Deletes value by pointer from dest.
 
         Args:
-            pointer: JSON pointer (префиксы игнорируются - всегда удаляет из dest)
-            ctx: Контекст выполнения
-            ignore_missing: Игнорировать ли отсутствующие пути
+            pointer: JSON pointer (prefixes ignored - always deletes from dest)
+            ctx: Execution context
+            ignore_missing: Whether to ignore missing paths
 
         Raises:
-            KeyError: Если путь не существует и ignore_missing=False
+            KeyError: If path does not exist and ignore_missing=False
 
         Note:
-            Операции удаления всегда выполняются в ctx.dest, т.к. source неизменяем.
-            Префиксы @:/, _:/ игнорируются для обратной совместимости.
+            Delete operations always execute in ctx.dest, as source is immutable.
+            Prefixes @:/, _:/ are ignored for backward compatibility.
         """
-        # Убираем префикс если есть (delete всегда из dest)
+        # Remove prefix if present (delete always from dest)
         clean_path = pointer
         if pointer.startswith("@:/") or pointer.startswith("@:"):
             clean_path = "/" + pointer[2:].lstrip("/")
         elif pointer.startswith("_:/") or pointer.startswith("_:"):
             clean_path = "/" + pointer[2:].lstrip("/")
 
-        # resolver.delete не поддерживает ignore_missing, обрабатываем вручную
+        # resolver.delete doesn't support ignore_missing, handle manually
         if ignore_missing and not self.exists("@:" + clean_path, ctx):
             return
 
         ctx.engine.resolver.delete(clean_path, ctx.dest)
 
     def exists(self, pointer: str, ctx: ExecutionContext) -> bool:
-        """Проверяет существование пути с учетом префикса.
+        """Checks if path exists with prefix support.
 
         Args:
-            pointer: JSON pointer с возможным префиксом
-            ctx: Контекст выполнения
+            pointer: JSON pointer with optional prefix
+            ctx: Execution context
 
         Returns:
-            True если путь существует, False иначе
+            True if path exists, False otherwise
         """
         processed_path, data_source = self.resolve(pointer, ctx)
         return ctx.engine.resolver.exists(processed_path, data_source)

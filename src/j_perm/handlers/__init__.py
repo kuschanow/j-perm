@@ -35,6 +35,7 @@ from .ops import (
     ForeachHandler, WhileHandler, IfHandler, ExecHandler,
     UpdateHandler, DistinctHandler,
     AssertHandler,
+    TryHandler,
 )
 from .special import SpecialFn, SpecialMatcher, SpecialResolveHandler
 from .template import TemplMatcher, TemplSubstHandler, template_unescape
@@ -101,6 +102,7 @@ __all__ = [
     "UpdateHandler",
     "DistinctHandler",
     "AssertHandler",
+    "TryHandler",
     # function
     "DefMatcher",
     "CallMatcher",

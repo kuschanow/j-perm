@@ -1227,6 +1227,98 @@ Assert value existence/equality.
 
 ---
 
+### `try`
+
+Execute actions with error handling (try-except-finally pattern).
+
+**Basic try-except:**
+
+```json
+{
+    "op": "try",
+    "do": [
+        {"op": "copy", "from": "/might_not_exist", "path": "/result"}
+    ],
+    "except": [
+        {"/error": "Failed to copy value"}
+    ]
+}
+```
+
+**Access error information:**
+
+```json
+{
+    "op": "try",
+    "do": [
+        {"$raise": "Something went wrong"}
+    ],
+    "except": [
+        {"/error_message": "${_:/_error_message}"},
+        {"/error_type": "${_:/_error_type}"}
+    ]
+}
+```
+
+**With finally cleanup:**
+
+```json
+{
+    "op": "try",
+    "do": [
+        {"/status": "processing"},
+        {"op": "exec", "from": "/dangerous_operation"}
+    ],
+    "except": [
+        {"/status": "error"},
+        {"/error_msg": "${_:/_error_message}"}
+    ],
+    "finally": [
+        {"/processed_at": "2024-01-01"},
+        {"/cleanup": true}
+    ]
+}
+```
+
+**Behavior:**
+- Executes actions in `do` block
+- If error occurs:
+  - Error info stored in metadata (`_error_type`, `_error_message`)
+  - If `except` block provided, executes it with error info accessible via `_:/` prefix
+  - If no `except`, re-raises error after executing `finally` (if present)
+- `finally` block always executes (even on error)
+- Except block sees dest state at time of error
+
+**Metadata during except:**
+- `_:/_error_type` — error class name (e.g., "JPermError")
+- `_:/_error_message` — error message string
+
+**Example: Validation with fallback**
+
+```python
+spec = {
+    "op": "try",
+    "do": [
+        {"/age": {"$cast": {"value": "${/user_input}", "type": "int"}}},
+        {
+            "op": "if",
+            "cond": {"$lt": [{"$ref": "@:/age"}, 0]},
+            "then": [{"$raise": "Age cannot be negative"}]
+        },
+        {"/valid": True}
+    ],
+    "except": [
+        {"/valid": False},
+        {"/error": "${_:/_error_message}"}
+    ]
+}
+
+result = engine.apply(spec, source={"user_input": "-5"}, dest={})
+# → {"age": -5, "valid": False, "error": "Age cannot be negative"}
+```
+
+---
+
 ## Extending J-Perm
 
 ### Custom Operations

@@ -100,6 +100,7 @@ from .handlers import (
     UpdateHandler,
     DistinctHandler,
     AssertHandler,
+    TryHandler,
     # function
     DefMatcher,
     CallMatcher,
@@ -229,6 +230,7 @@ __all__ = [
     "UpdateHandler",
     "DistinctHandler",
     "AssertHandler",
+    "TryHandler",
     "DefMatcher",
     "CallMatcher",
     "DefHandler",
