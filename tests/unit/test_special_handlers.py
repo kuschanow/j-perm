@@ -1,4 +1,4 @@
-"""Tests for special construct handlers ($ref, $eval)."""
+"""Tests for special construct handlers ($ref, $eval, $cast, comparison operators)."""
 
 import pytest
 from j_perm import build_default_engine
@@ -367,8 +367,8 @@ class TestDestPointer:
 
         assert result == {"user": {"name": "Alice"}, "result": "Alice"}
 
-    def test_dest_pointer_returns_none_on_missing(self):
-        """@:/path returns None if path is missing."""
+    def test_dest_pointer_returns_expr_on_missing(self):
+        """@:/path returns the expression itself if path is missing."""
         engine = build_default_engine()
 
         result = engine.apply(
@@ -377,7 +377,9 @@ class TestDestPointer:
             dest={},
         )
 
-        assert result == {"result": None}
+        # Changed behavior: returns the expression instead of None
+        # This allows literal values like ${int:42} to work
+        assert result == {"result": "@:/missing"}
 
     def test_dest_pointer_in_concatenation(self):
         """@:/path can be used in string concatenation."""
@@ -423,4 +425,444 @@ class TestDestPointer:
         )
 
         assert result["comparison"] == "Source: from_source, Dest: from_dest"
+
+
+class TestCastHandler:
+    """Test $cast special construct."""
+
+    def test_cast_int_from_string(self):
+        """$cast converts string to int."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$cast": {"value": "42", "type": "int"}}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": 42}
+        assert isinstance(result["result"], int)
+
+    def test_cast_float_from_string(self):
+        """$cast converts string to float."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$cast": {"value": "3.14", "type": "float"}}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": 3.14}
+        assert isinstance(result["result"], float)
+
+    def test_cast_bool_from_string(self):
+        """$cast converts string to bool."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$cast": {"value": "1", "type": "bool"}}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": True}
+        assert isinstance(result["result"], bool)
+
+    def test_cast_str_from_int(self):
+        """$cast converts int to string."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$cast": {"value": 42, "type": "str"}}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": "42"}
+        assert isinstance(result["result"], str)
+
+    def test_cast_with_template_value(self):
+        """$cast can cast template-substituted values."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$cast": {"value": "${/count}", "type": "int"}}},
+            source={"count": "100"},
+            dest={},
+        )
+
+        assert result == {"result": 100}
+        assert isinstance(result["result"], int)
+
+    def test_cast_with_ref_value(self):
+        """$cast can cast $ref-resolved values."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$cast": {"value": {"$ref": "/data"}, "type": "float"}}},
+            source={"data": "2.718"},
+            dest={},
+        )
+
+        assert result == {"result": 2.718}
+        assert isinstance(result["result"], float)
+
+    def test_cast_with_dynamic_type(self):
+        """$cast type can be dynamically resolved."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$cast": {"value": "123", "type": "${/cast_type}"}}},
+            source={"cast_type": "int"},
+            dest={},
+        )
+
+        assert result == {"result": 123}
+        assert isinstance(result["result"], int)
+
+    def test_cast_unknown_type_raises(self):
+        """$cast raises KeyError for unknown type."""
+        engine = build_default_engine()
+
+        with pytest.raises(KeyError, match="Unknown cast type"):
+            engine.apply(
+                {"/result": {"$cast": {"value": "42", "type": "unknown_type"}}},
+                source={},
+                dest={},
+            )
+
+    def test_cast_missing_value_key_raises(self):
+        """$cast raises ValueError if 'value' key is missing."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="requires both 'value' and 'type' keys"):
+            engine.apply(
+                {"/result": {"$cast": {"type": "int"}}},
+                source={},
+                dest={},
+            )
+
+    def test_cast_missing_type_key_raises(self):
+        """$cast raises ValueError if 'type' key is missing."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="requires both 'value' and 'type' keys"):
+            engine.apply(
+                {"/result": {"$cast": {"value": "42"}}},
+                source={},
+                dest={},
+            )
+
+    def test_cast_invalid_spec_raises(self):
+        """$cast raises ValueError if spec is not a dict."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="requires a dict"):
+            engine.apply(
+                {"/result": {"$cast": "invalid"}},
+                source={},
+                dest={},
+            )
+
+    def test_cast_non_string_type_raises(self):
+        """$cast raises ValueError if type is not a string."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="type must be a string"):
+            engine.apply(
+                {"/result": {"$cast": {"value": "42", "type": 123}}},
+                source={},
+                dest={},
+            )
+
+    def test_cast_custom_caster(self):
+        """$cast works with custom casters."""
+        def custom_upper(x):
+            return str(x).upper()
+
+        engine = build_default_engine(casters={"upper": custom_upper})
+
+        result = engine.apply(
+            {"/result": {"$cast": {"value": "hello", "type": "upper"}}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": "HELLO"}
+
+    def test_cast_in_array(self):
+        """$cast works inside arrays."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/results": [
+                {"$cast": {"value": "1", "type": "int"}},
+                {"$cast": {"value": "2.5", "type": "float"}},
+                {"$cast": {"value": "0", "type": "bool"}},
+            ]},
+            source={},
+            dest={},
+        )
+
+        assert result == {"results": [1, 2.5, False]}
+        assert isinstance(result["results"][0], int)
+        assert isinstance(result["results"][1], float)
+        assert isinstance(result["results"][2], bool)
+
+    def test_cast_vs_template_cast(self):
+        """$cast construct vs template ${type:...} syntax both work."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {
+                "/via_construct": {"$cast": {"value": "42", "type": "int"}},
+                "/via_template": "${int:42}",
+            },
+            source={},
+            dest={},
+        )
+
+        # Both should produce the same result
+        assert result["via_construct"] == 42
+        assert result["via_template"] == 42
+        assert result["via_construct"] == result["via_template"]
+
+
+class TestComparisonOperators:
+    """Test comparison operator constructs ($gt, $gte, $lt, $lte, $eq, $ne)."""
+
+    def test_gt_true(self):
+        """$gt returns True when left > right."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$gt": [10, 5]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": True}
+
+    def test_gt_false(self):
+        """$gt returns False when left <= right."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$gt": [5, 10]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": False}
+
+    def test_gt_with_templates(self):
+        """$gt works with template substitution."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$gt": ["${/age}", 18]}},
+            source={"age": 25},
+            dest={},
+        )
+
+        assert result == {"result": True}
+
+    def test_gte_equal(self):
+        """$gte returns True when left == right."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$gte": [10, 10]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": True}
+
+    def test_gte_greater(self):
+        """$gte returns True when left > right."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$gte": [15, 10]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": True}
+
+    def test_lt_true(self):
+        """$lt returns True when left < right."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$lt": [5, 10]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": True}
+
+    def test_lt_false(self):
+        """$lt returns False when left >= right."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$lt": [10, 5]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": False}
+
+    def test_lte_equal(self):
+        """$lte returns True when left == right."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$lte": [10, 10]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": True}
+
+    def test_lte_less(self):
+        """$lte returns True when left < right."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$lte": [5, 10]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": True}
+
+    def test_eq_true(self):
+        """$eq returns True when values are equal."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$eq": [10, 10]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": True}
+
+    def test_eq_false(self):
+        """$eq returns False when values are not equal."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$eq": [10, 5]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": False}
+
+    def test_eq_strings(self):
+        """$eq works with strings."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$eq": ["${/status}", "active"]}},
+            source={"status": "active"},
+            dest={},
+        )
+
+        assert result == {"result": True}
+
+    def test_ne_true(self):
+        """$ne returns True when values are not equal."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$ne": [10, 5]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": True}
+
+    def test_ne_false(self):
+        """$ne returns False when values are equal."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$ne": [10, 10]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": False}
+
+    def test_comparison_with_ref(self):
+        """Comparison operators work with $ref."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$gt": [{"$ref": "/count"}, 100]}},
+            source={"count": 150},
+            dest={},
+        )
+
+        assert result == {"result": True}
+
+    def test_comparison_with_cast(self):
+        """Comparison operators work with $cast."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$gte": [{"$cast": {"value": "25", "type": "int"}}, 18]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": True}
+
+    def test_gt_invalid_args_raises(self):
+        """$gt raises ValueError if not given exactly 2 values."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="requires a list of exactly 2 values"):
+            engine.apply(
+                {"/result": {"$gt": [10]}},
+                source={},
+                dest={},
+            )
+
+    def test_eq_invalid_args_raises(self):
+        """$eq raises ValueError if not given a list."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="requires a list of exactly 2 values"):
+            engine.apply(
+                {"/result": {"$eq": "invalid"}},
+                source={},
+                dest={},
+            )
+
+    def test_nested_comparisons_in_if(self):
+        """Comparison operators can be used in if conditions."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            [
+                {"/age": 25},
+                {
+                    "op": "if",
+                    "cond": {"$gte": [{"$ref": "@:/age"}, 18]},
+                    "then": [{"/is_adult": True}],
+                    "else": [{"/is_adult": False}],
+                },
+            ],
+            source={},
+            dest={},
+        )
+
+        assert result == {"age": 25, "is_adult": True}
 

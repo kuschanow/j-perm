@@ -14,9 +14,8 @@ template_unescape
     Post-stabilisation unescape function.  Registered as an ``UnescapeRule``
     by the factory; converts ``$${`` → ``${`` and ``$$`` → ``$`` throughout
     an arbitrary value tree.
-
-Built-in casters
-----------------
+Built-in casters (imported from ``casters`` module)
+----------------------------------------------------
 * ``int``   – cast to integer
 * ``float`` – cast to float
 * ``bool``  – cast to boolean (``int(x)`` then ``bool``)
@@ -47,17 +46,7 @@ import jmespath
 from jmespath import functions as _jp_funcs
 
 from ..core import ActionHandler, ActionMatcher, ExecutionContext
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Built-in casters
-# ─────────────────────────────────────────────────────────────────────────────
-
-_BUILTIN_CASTERS: dict[str, Callable[[Any], Any]] = {
-    "int": lambda x: int(x),
-    "float": lambda x: float(x),
-    "bool": lambda x: bool(int(x)) if isinstance(x, (int, str)) else bool(x),
-    "str": lambda x: str(x),
-}
+from ..casters import BUILTIN_CASTERS
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -149,7 +138,7 @@ class TemplSubstHandler(ActionHandler):
             casters: Mapping[str, Callable] | None = None,
             jmes_options: jmespath.Options | None = None,
     ) -> None:
-        self._casters = dict(casters) if casters else _BUILTIN_CASTERS
+        self._casters = dict(casters) if casters else BUILTIN_CASTERS
         self._jp_options = jmes_options if jmes_options else _BUILTIN_JMES_OPTIONS
 
     # -- public -------------------------------------------------------------
@@ -271,7 +260,7 @@ class TemplSubstHandler(ActionHandler):
         try:
             return ctx.engine.processor.get(pointer, ctx)
         except Exception:
-            return None
+            return expr
 
 
 # ─────────────────────────────────────────────────────────────────────────────

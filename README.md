@@ -3,7 +3,7 @@
 A composable JSON transformation DSL with a powerful, extensible architecture.
 
 J-Perm lets you describe data transformations as **executable specifications** — a list of steps that can be applied to input documents. It supports
-JSON Pointer addressing, template interpolation with `${...}` syntax, special constructs (`$ref`, `$eval`, `$and`, `$or`, `$not`), and a rich set of built-in operations.
+JSON Pointer addressing, template interpolation with `${...}` syntax, special constructs (`$ref`, `$eval`, `$cast`, logical and comparison operators), and a rich set of built-in operations.
 
 ---
 
@@ -117,10 +117,10 @@ from j_perm import build_default_engine
 # Default engine with all built-ins
 engine = build_default_engine()
 
-# Custom specials (None = use defaults: $ref, $eval, $and, $or, $not)
+# Custom specials (None = use defaults: $ref, $eval, $cast, $and, $or, $not)
 engine = build_default_engine(
     specials={"$ref": my_ref_handler, "$custom": my_handler},
-    casters={"int": lambda x: int(x), "json": lambda x: json.loads(x)},
+    casters={"int": lambda x: int(x), "json": lambda x: json.loads(x)},  # Used in ${type:...} AND $cast
     jmes_options=jmespath.Options(custom_functions=CustomFunctions())
 )
 ```
@@ -244,6 +244,8 @@ Templates are resolved by `TemplSubstHandler` in the value pipeline.
 "${str:/id}"
 ```
 
+**Note:** Type casters can also be used via the `$cast` construct (see Special Constructs section).
+
 #### JMESPath queries
 
 ```python
@@ -308,6 +310,51 @@ Special values are resolved by `SpecialResolveHandler`.
 - Executes nested DSL with `dest={}`
 - Optionally selects sub-path from result
 
+#### `$cast` — Type casting
+
+```json
+{
+    "$cast": {
+        "value": "42",
+        "type": "int"
+    }
+}
+```
+
+- Applies a registered type caster to a value
+- `value` — the value to cast (supports templates, `$ref`, etc.)
+- `type` — name of the registered caster (built-in: `int`, `float`, `bool`, `str`)
+- Alternative to template syntax `${type:...}`
+
+**Examples:**
+
+```python
+# Cast string to int
+{"/age": {"$cast": {"value": "25", "type": "int"}}}
+
+# Cast with template substitution
+{"/count": {"$cast": {"value": "${/raw_count}", "type": "int"}}}
+
+# Cast with $ref
+{"/price": {"$cast": {"value": {"$ref": "/data/price"}, "type": "float"}}}
+
+# Dynamic type selection
+{"/result": {"$cast": {"value": "123", "type": "${/target_type}"}}}
+```
+
+**Custom casters:**
+
+```python
+# Define custom caster
+def custom_upper(x):
+    return str(x).upper()
+
+engine = build_default_engine(casters={"upper": custom_upper})
+
+# Use in spec
+{"/name": {"$cast": {"value": "alice", "type": "upper"}}}  # → "ALICE"
+```
+
 #### `$and` — Logical AND with short-circuit
 
 ```json
@@ -348,6 +395,74 @@ Special values are resolved by `SpecialResolveHandler`.
 
 - Executes action with empty `dest`
 - Returns logical negation of the result
+
+#### Comparison Operators
+
+J-Perm provides comparison operators that work with any values:
+
+**`$gt` — Greater than**
+
+```json
+{"$gt": [10, 5]}  → true
+{"$gt": ["${/age}", 18]}  → true if age > 18
+```
+
+**`$gte` — Greater than or equal**
+
+```json
+{"$gte": [10, 10]}  → true
+{"$gte": [{"$ref": "/count"}, 100]}  → true if count >= 100
+```
+
+**`$lt` — Less than**
+
+```json
+{"$lt": [5, 10]}  → true
+{"$lt": ["${/price}", 50]}  → true if price < 50
+```
+
+**`$lte` — Less than or equal**
+
+```json
+{"$lte": [10, 10]}  → true
+{"$lte": [{"$ref": "/temperature"}, 30]}  → true if temperature <= 30
+```
+
+**`$eq` — Equal**
+
+```json
+{"$eq": [10, 10]}  → true
+{"$eq": ["${/status}", "active"]}  → true if status == "active"
+```
+
+**`$ne` — Not equal**
+
+```json
+{"$ne": [10, 5]}  → true
+{"$ne": ["${/role}", "admin"]}  → true if role != "admin"
+```
+
+**Usage in conditions:**
+
+```python
+spec = [
+    {"/age": 25},
+    {
+        "op": "if",
+        "cond": {"$gte": [{"$ref": "@:/age"}, 18]},
+        "then": [{"/is_adult": True}],
+        "else": [{"/is_adult": False}],
+    },
+]
+
+result = engine.apply(spec, source={}, dest={})
+# → {"age": 25, "is_adult": True}
+```
+
+**Features:**
+- All operators accept exactly 2 values in a list
+- Values are processed through `process_value` (support templates, `$ref`, `$cast`, etc.)
+- Can be nested and combined with logical operators
 
 ---
 
@@ -965,20 +1080,32 @@ main_pipeline = Pipeline(stages=stages, registry=main_registry)
 
 ### Custom Casters
 
-Provide custom casters to `TemplSubstHandler`:
+Casters are used in both template syntax (`${type:...}`) and the `$cast` construct.
+
+Provide custom casters via `build_default_engine`:
 
 ```python
-from j_perm import TemplSubstHandler
+import json
+from j_perm import build_default_engine
 
 custom_casters = {
     "int": lambda x: int(x),
+    "float": lambda x: float(x),
     "json": lambda x: json.loads(x),
+    "upper": lambda x: str(x).upper(),
 }
 
-handler = TemplSubstHandler(casters=custom_casters)
+engine = build_default_engine(casters=custom_casters)
+
+# Now you can use them in both ways:
+spec = [
+    {"/age": "${int:/raw_age}"},              # Template syntax
+    {"/data": {"$cast": {"value": "{}", "type": "json"}}},  # $cast construct
+    {"/name": {"$cast": {"value": "alice", "type": "upper"}}},
+]
 ```
 
-Or use the default (built-in `int`, `float`, `bool`, `str`).
+Or use the default built-in casters: `int`, `float`, `bool`, `str`.
 
 ---
 
@@ -1315,9 +1442,18 @@ from j_perm import (
     # Special construct functions
     ref_handler,
     eval_handler,
+    make_cast_handler,  # Factory for $cast handler
     and_handler,
     or_handler,
     not_handler,
+
+    # Comparison operators
+    gt_handler,
+    gte_handler,
+    lt_handler,
+    lte_handler,
+    eq_handler,
+    ne_handler,
 
     # Function handlers
     DefMatcher,
@@ -1352,6 +1488,9 @@ from j_perm import (
 
     # Resolver
     PointerResolver,
+
+    # Casters
+    BUILTIN_CASTERS,  # Built-in type casters (int, float, bool, str)
 
     # Shorthand stages
     AssertShorthandProcessor,

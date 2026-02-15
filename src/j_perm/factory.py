@@ -16,6 +16,7 @@ from typing import Mapping, Callable, Any
 
 import jmespath
 
+from .casters import BUILTIN_CASTERS
 from .core import (
     ActionNode,
     ActionTypeRegistry,
@@ -25,6 +26,8 @@ from .core import (
 )
 from .handlers.constructs import (
     ref_handler, eval_handler, and_handler, or_handler, not_handler,
+    make_cast_handler,
+    gt_handler, gte_handler, lt_handler, lte_handler, eq_handler, ne_handler,
 )
 from .handlers.container import ContainerMatcher, RecursiveDescentHandler
 from .handlers.function import (
@@ -69,7 +72,8 @@ def build_default_engine(
         * Registry: all 12 built-in ops (set, copy, delete, foreach, while, if, exec, update, distinct, assert, def, func).
 
     value_pipeline
-        * ``SpecialResolveHandler``   (priority 10)  – ``$ref``, ``$eval``, ``$and``, ``$or``, ``$not``.
+        * ``SpecialResolveHandler``   (priority 10)  – ``$ref``, ``$eval``, ``$cast``,
+          ``$and``, ``$or``, ``$not``, ``$gt``, ``$gte``, ``$lt``, ``$lte``, ``$eq``, ``$ne``.
         * ``TemplSubstHandler``       (priority  8)  – ``${…}`` with built-in
           casters (int, float, bool, str), JMESPath function (subtract), and
           dest pointer (@:/path).
@@ -82,8 +86,8 @@ def build_default_engine(
 
     Args:
         specials:        Custom special-construct handlers.  ``None`` → uses
-                         defaults (``{"$ref": ref_handler, "$eval": eval_handler, "$and": and_handler, "$or": or_handler, "$not": not_handler}``).
-        casters:         Custom template casters.  ``None`` → uses built-in
+                         defaults (``$ref``, ``$eval``, ``$cast``, ``$and``, ``$or``, ``$not``, ``$gt``, ``$gte``, ``$lt``, ``$lte``, ``$eq``, ``$ne``).
+        casters:         Custom template casters (used in both ``${type:...}`` and ``$cast``).  ``None`` → uses built-in (int, float, bool, str).
         jmes_options:    Custom JMESPath options for template handler.  ``None`` → uses built-in with subtract function.
         value_max_depth: Stabilisation-loop iteration cap.
 
@@ -105,12 +109,21 @@ def build_default_engine(
 
     # -- default specials ---------------------------------------------------
     if specials is None:
+        # Resolve casters for $cast handler
+        resolved_casters = casters if casters is not None else BUILTIN_CASTERS
         specials = {
             "$ref": ref_handler,
             "$eval": eval_handler,
             "$and": and_handler,
             "$or": or_handler,
             "$not": not_handler,
+            "$cast": make_cast_handler(resolved_casters),
+            "$gt": gt_handler,
+            "$gte": gte_handler,
+            "$lt": lt_handler,
+            "$lte": lte_handler,
+            "$eq": eq_handler,
+            "$ne": ne_handler,
         }
 
     # -- value pipeline -----------------------------------------------------

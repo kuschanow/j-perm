@@ -785,7 +785,8 @@ class Engine:
         current = value
         for _ in range(self.value_max_depth):
             # Save real dest in metadata for JMESPath access
-            metadata_with_dest = {**ctx.metadata, '_real_dest': ctx.dest}
+            # Preserve existing _real_dest if we're in a nested process_value call
+            metadata_with_dest = {**ctx.metadata, '_real_dest': ctx.metadata.get('_real_dest', ctx.dest)}
             value_ctx = ExecutionContext(
                 source=ctx.source,
                 dest=current,
@@ -816,7 +817,8 @@ class Engine:
         current = value
         for _ in range(self.value_max_depth):
             # Save real dest in metadata for JMESPath access
-            metadata_with_dest = {**ctx.metadata, '_real_dest': ctx.dest}
+            # Preserve existing _real_dest if we're in a nested process_value call
+            metadata_with_dest = {**ctx.metadata, '_real_dest': ctx.metadata.get('_real_dest', ctx.dest)}
             value_ctx = ExecutionContext(
                 source=ctx.source,
                 dest=current,

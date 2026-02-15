@@ -1,4 +1,4 @@
-"""Special construct handlers: ``$ref`` and ``$eval``.
+"""Special construct handlers: ``$ref``, ``$eval``, and ``$cast``.
 
 These are ``SpecialFn`` callables meant to be registered with
 ``SpecialResolveHandler`` in the value pipeline.
@@ -12,6 +12,10 @@ ref_handler
 eval_handler
     Handles ``{"$eval": actions, "$select": pointer}`` construct.
     Executes nested actions with empty dest, optionally selects sub-path.
+
+make_cast_handler
+    Factory function that creates a cast handler with registered casters.
+    Returns a handler for ``{"$cast": {"value": <value>, "type": <type_name>}}`` construct.
 """
 
 from __future__ import annotations
@@ -162,3 +166,219 @@ def not_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
 
     result = ctx.engine.apply(node["$not"], source=ctx.source, dest={})
     return not result
+
+
+def gt_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$gt`` construct: greater than comparison.
+
+    Schema::
+
+        {"$gt": [<left>, <right>]}
+
+    Behavior:
+    * Both values are processed through ``process_value``
+    * Returns ``left > right``
+
+    Examples::
+
+        {"$gt": [10, 5]}                              → True
+        {"$gt": ["${/age}", 18]}                      → True if age > 18
+        {"$gt": [{"$ref": "/count"}, 0]}              → True if count > 0
+    """
+    if not isinstance(node["$gt"], list) or len(node["$gt"]) != 2:
+        raise ValueError("$gt requires a list of exactly 2 values")
+
+    left = ctx.engine.process_value(node["$gt"][0], ctx)
+    right = ctx.engine.process_value(node["$gt"][1], ctx)
+    return left > right
+
+
+def gte_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$gte`` construct: greater than or equal comparison.
+
+    Schema::
+
+        {"$gte": [<left>, <right>]}
+
+    Behavior:
+    * Both values are processed through ``process_value``
+    * Returns ``left >= right``
+
+    Examples::
+
+        {"$gte": [10, 10]}                            → True
+        {"$gte": ["${/age}", 18]}                     → True if age >= 18
+    """
+    if not isinstance(node["$gte"], list) or len(node["$gte"]) != 2:
+        raise ValueError("$gte requires a list of exactly 2 values")
+
+    left = ctx.engine.process_value(node["$gte"][0], ctx)
+    right = ctx.engine.process_value(node["$gte"][1], ctx)
+    return left >= right
+
+
+def lt_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$lt`` construct: less than comparison.
+
+    Schema::
+
+        {"$lt": [<left>, <right>]}
+
+    Behavior:
+    * Both values are processed through ``process_value``
+    * Returns ``left < right``
+
+    Examples::
+
+        {"$lt": [5, 10]}                              → True
+        {"$lt": ["${/age}", 18]}                      → True if age < 18
+    """
+    if not isinstance(node["$lt"], list) or len(node["$lt"]) != 2:
+        raise ValueError("$lt requires a list of exactly 2 values")
+
+    left = ctx.engine.process_value(node["$lt"][0], ctx)
+    right = ctx.engine.process_value(node["$lt"][1], ctx)
+    return left < right
+
+
+def lte_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$lte`` construct: less than or equal comparison.
+
+    Schema::
+
+        {"$lte": [<left>, <right>]}
+
+    Behavior:
+    * Both values are processed through ``process_value``
+    * Returns ``left <= right``
+
+    Examples::
+
+        {"$lte": [10, 10]}                            → True
+        {"$lte": ["${/age}", 65]}                     → True if age <= 65
+    """
+    if not isinstance(node["$lte"], list) or len(node["$lte"]) != 2:
+        raise ValueError("$lte requires a list of exactly 2 values")
+
+    left = ctx.engine.process_value(node["$lte"][0], ctx)
+    right = ctx.engine.process_value(node["$lte"][1], ctx)
+    return left <= right
+
+
+def eq_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$eq`` construct: equality comparison.
+
+    Schema::
+
+        {"$eq": [<left>, <right>]}
+
+    Behavior:
+    * Both values are processed through ``process_value``
+    * Returns ``left == right``
+
+    Examples::
+
+        {"$eq": [10, 10]}                             → True
+        {"$eq": ["${/status}", "active"]}             → True if status == "active"
+        {"$eq": [{"$ref": "/name"}, "Alice"]}         → True if name == "Alice"
+    """
+    if not isinstance(node["$eq"], list) or len(node["$eq"]) != 2:
+        raise ValueError("$eq requires a list of exactly 2 values")
+
+    left = ctx.engine.process_value(node["$eq"][0], ctx)
+    right = ctx.engine.process_value(node["$eq"][1], ctx)
+    return left == right
+
+
+def ne_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$ne`` construct: not equal comparison.
+
+    Schema::
+
+        {"$ne": [<left>, <right>]}
+
+    Behavior:
+    * Both values are processed through ``process_value``
+    * Returns ``left != right``
+
+    Examples::
+
+        {"$ne": [10, 5]}                              → True
+        {"$ne": ["${/status}", "deleted"]}            → True if status != "deleted"
+    """
+    if not isinstance(node["$ne"], list) or len(node["$ne"]) != 2:
+        raise ValueError("$ne requires a list of exactly 2 values")
+
+    left = ctx.engine.process_value(node["$ne"][0], ctx)
+    right = ctx.engine.process_value(node["$ne"][1], ctx)
+    return left != right
+
+
+def make_cast_handler(casters: Mapping[str, Any]) -> Any:
+    """Factory function that creates a cast handler with registered casters.
+
+    Args:
+        casters: Dictionary mapping type names to caster functions.
+                 Example: {"int": int, "float": float, "mytype": my_caster_fn}
+
+    Returns:
+        A handler function for the ``$cast`` construct.
+
+    The returned handler processes constructs of the form::
+
+        {"$cast": {"value": <some_value>, "type": "<type_name>"}}
+
+    Behavior:
+    * ``value`` is processed through ``process_value`` (template substitution, etc.)
+    * ``type`` is the name of a registered caster
+    * The caster is applied to the processed value
+    * Returns the casted result
+    * Raises ``KeyError`` if the type is not registered
+    * Raises ``ValueError`` if the construct is malformed
+
+    Examples::
+
+        {"$cast": {"value": "42", "type": "int"}}          → 42
+        {"$cast": {"value": "${/count}", "type": "float"}} → 3.14
+        {"$cast": {"value": "1", "type": "bool"}}          → True
+    """
+    _casters = dict(casters)
+
+    def cast_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+        """``$cast`` construct: apply a registered type caster to a value."""
+        cast_spec = node.get("$cast")
+
+        if not isinstance(cast_spec, Mapping):
+            raise ValueError(
+                f"$cast construct requires a dict with 'value' and 'type' keys, "
+                f"got {type(cast_spec).__name__}: {cast_spec!r}"
+            )
+
+        if "value" not in cast_spec or "type" not in cast_spec:
+            raise ValueError(
+                f"$cast construct requires both 'value' and 'type' keys, "
+                f"got keys: {list(cast_spec.keys())}"
+            )
+
+        # Process the value (allows templates, references, etc.)
+        value = ctx.engine.process_value(cast_spec["value"], ctx)
+
+        # Get the type name (also process it to allow dynamic type selection)
+        type_name = ctx.engine.process_value(cast_spec["type"], ctx)
+
+        if not isinstance(type_name, str):
+            raise ValueError(
+                f"$cast type must be a string, got {type(type_name).__name__}: {type_name!r}"
+            )
+
+        # Look up and apply the caster
+        if type_name not in _casters:
+            raise KeyError(
+                f"Unknown cast type '{type_name}'. "
+                f"Available types: {sorted(_casters.keys())}"
+            )
+
+        caster = _casters[type_name]
+        return caster(value)
+
+    return cast_handler
