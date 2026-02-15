@@ -1001,6 +1001,196 @@ class PrefixMatcher(ActionMatcher):
 
 ---
 
+## Async Support
+
+J-Perm provides full support for asynchronous operations through parallel async infrastructure.
+
+### Overview
+
+All core components have async counterparts that work seamlessly with Python's `async`/`await`:
+
+- **Sync pipeline** (`engine.apply()`) - for synchronous handlers
+- **Async pipeline** (`engine.apply_async()`) - for async handlers and I/O operations
+- **Mixed mode** - sync and async handlers can coexist in the same pipeline
+
+### Async Base Classes
+
+```python
+from j_perm import AsyncActionHandler, AsyncStageProcessor, AsyncMiddleware
+
+class AsyncHttpHandler(AsyncActionHandler):
+    """Async handler for HTTP requests."""
+
+    async def execute(self, step, ctx):
+        url = await ctx.engine.process_value_async(step["url"], ctx)
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                data = await response.json()
+                ctx.dest["response"] = data
+
+        return ctx.dest
+```
+
+### Using Async Engine
+
+```python
+import asyncio
+from j_perm import build_default_engine, ActionNode, OpMatcher
+
+# Build engine as usual
+engine = build_default_engine()
+
+# Register async handler
+engine.main_pipeline.registry.register(ActionNode(
+    name="http",
+    priority=10,
+    matcher=OpMatcher("http"),
+    handler=AsyncHttpHandler(),
+))
+
+# Use async apply
+async def main():
+    spec = [
+        {"op": "http", "url": "https://api.example.com/data"},
+        {"/result": "${@:/response/value}"}
+    ]
+
+    result = await engine.apply_async(spec, source={}, dest={})
+    print(result)
+
+asyncio.run(main())
+```
+
+### Async Methods
+
+| Method | Description |
+|--------|-------------|
+| `engine.apply_async()` | Async version of `apply()` |
+| `engine.apply_to_context_async()` | Async version of `apply_to_context()` |
+| `engine.process_value_async()` | Async value stabilization |
+| `engine.run_pipeline_async()` | Run named pipeline asynchronously |
+| `pipeline.run_async()` | Async pipeline execution |
+| `registry.run_all_async()` | Async stage execution (for `StageRegistry`) |
+
+### Mixing Sync and Async
+
+The async pipeline automatically handles both sync and async components:
+
+```python
+# Sync handler
+class SyncSetHandler(ActionHandler):
+    def execute(self, step, ctx):
+        ctx.dest["sync"] = True
+        return ctx.dest
+
+# Async handler
+class AsyncFetchHandler(AsyncActionHandler):
+    async def execute(self, step, ctx):
+        data = await fetch_data()  # async I/O
+        ctx.dest["async"] = data
+        return ctx.dest
+
+# Both work in apply_async()
+result = await engine.apply_async([
+    {"op": "set", ...},      # sync handler
+    {"op": "fetch", ...},    # async handler
+], source={}, dest={})
+```
+
+### When to Use Async
+
+Use async handlers for:
+
+- **Network I/O** - HTTP requests, API calls, webhooks
+- **Database operations** - async DB queries
+- **File I/O** - async file reads/writes
+- **External services** - Cloud APIs, microservices
+- **Concurrent operations** - when you need to parallelize work
+
+Sync handlers are fine for:
+
+- **Pure transformations** - data mapping, filtering
+- **Simple operations** - set, copy, delete
+- **CPU-bound work** - computations without I/O
+
+### Example: Async HTTP Handler
+
+```python
+import aiohttp
+from j_perm import AsyncActionHandler, ActionNode, OpMatcher
+
+class HttpGetHandler(AsyncActionHandler):
+    """Fetch data from HTTP endpoint."""
+
+    async def execute(self, step, ctx):
+        # Process URL with template support
+        url = await ctx.engine.process_value_async(step["url"], ctx)
+        headers = await ctx.engine.process_value_async(
+            step.get("headers", {}), ctx
+        )
+
+        # Make async HTTP request
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers) as response:
+                response.raise_for_status()
+                data = await response.json()
+
+        # Write result to destination
+        path = await ctx.engine.process_value_async(step["path"], ctx)
+        ctx.engine.resolver.set(path, ctx.dest, data)
+
+        return ctx.dest
+
+# Register and use
+engine.main_pipeline.registry.register(ActionNode(
+    name="http_get",
+    priority=10,
+    matcher=OpMatcher("http_get"),
+    handler=HttpGetHandler(),
+))
+
+# Usage
+spec = {
+    "op": "http_get",
+    "url": "https://api.github.com/users/${/username}",
+    "headers": {"Accept": "application/json"},
+    "path": "/user_data"
+}
+
+result = await engine.apply_async(spec, source={"username": "octocat"}, dest={})
+```
+
+### Async Stages and Middlewares
+
+You can also create async stages and middlewares:
+
+```python
+from j_perm import AsyncStageProcessor, AsyncMiddleware
+
+class AsyncValidationStage(AsyncStageProcessor):
+    """Async validation of steps."""
+
+    async def apply(self, steps, ctx):
+        # Async validation logic
+        await validate_steps(steps)
+        return steps
+
+class AsyncLoggingMiddleware(AsyncMiddleware):
+    """Log each step asynchronously."""
+
+    name = "async_logger"
+    priority = 10
+
+    async def process(self, step, ctx):
+        await log_step(step)  # async logging
+        return step
+```
+
+**Note:** Stages and middlewares remain sync by default. Only use async versions when you have actual async I/O in preprocessing/middleware logic.
+
+---
+
 ## Advanced Topics
 
 ### Value Stabilization Loop
@@ -1088,18 +1278,21 @@ from j_perm import (
 
     # Stage system
     StageProcessor,
+    AsyncStageProcessor,  # Async version
     StageMatcher,
     StageNode,
     StageRegistry,
 
     # Action system
     ActionHandler,
+    AsyncActionHandler,  # Async version
     ActionMatcher,
     ActionNode,
     ActionTypeRegistry,
 
     # Middleware
     Middleware,
+    AsyncMiddleware,  # Async version
 
     # Unescape
     UnescapeRule,
