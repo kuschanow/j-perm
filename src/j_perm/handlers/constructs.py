@@ -21,6 +21,7 @@ make_cast_handler
 from __future__ import annotations
 
 import copy
+import re
 from typing import Any, Mapping, Tuple
 
 from ..core import ExecutionContext
@@ -492,6 +493,538 @@ def mod_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
     for val in values[1:]:
         result = result % val
     return result
+
+
+def in_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$in`` construct: membership test (like Python's ``in`` operator).
+
+    Schema::
+
+        {"$in": [<value>, <container>]}
+
+    Behavior:
+    * Both values are processed through ``process_value``
+    * For strings: checks if value is a substring of container
+    * For lists/tuples: checks if value is in the list
+    * For dicts: checks if value is a key in the dict
+    * Returns boolean
+
+    Examples::
+
+        {"$in": ["world", "hello world"]}             → True (substring)
+        {"$in": [2, [1, 2, 3]]}                       → True (element in list)
+        {"$in": ["key", {"key": "value"}]}            → True (key in dict)
+        {"$in": ["x", "hello"]}                       → False
+        {"$in": [{"$ref": "/search"}, "${/text}"]}    → True/False
+    """
+    if not isinstance(node["$in"], list) or len(node["$in"]) != 2:
+        raise ValueError("$in requires a list of exactly 2 values: [value, container]")
+
+    value = ctx.engine.process_value(node["$in"][0], ctx)
+    container = ctx.engine.process_value(node["$in"][1], ctx)
+
+    return value in container
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# String operations
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def str_split_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$str_split`` construct: split string by delimiter.
+
+    Schema::
+
+        {"$str_split": {"string": <str>, "delimiter": <str>}}
+        {"$str_split": {"string": <str>, "delimiter": <str>, "maxsplit": <int>}}
+
+    Behavior:
+    * Splits string by delimiter
+    * Optional maxsplit parameter (default: -1, split all)
+    * Returns list of strings
+
+    Examples::
+
+        {"$str_split": {"string": "a,b,c", "delimiter": ","}}  → ["a", "b", "c"]
+        {"$str_split": {"string": "a b c", "delimiter": " "}}  → ["a", "b", "c"]
+        {"$str_split": {"string": "a:b:c", "delimiter": ":", "maxsplit": 1}}  → ["a", "b:c"]
+    """
+    spec = node["$str_split"]
+    if isinstance(spec, str):
+        raise ValueError("$str_split requires a dict with 'string' and 'delimiter'")
+
+    string = ctx.engine.process_value(spec.get("string", ""), ctx)
+    delimiter = ctx.engine.process_value(spec.get("delimiter", " "), ctx)
+    maxsplit = ctx.engine.process_value(spec.get("maxsplit", -1), ctx)
+
+    if not isinstance(string, str):
+        raise ValueError(f"$str_split 'string' must be a string, got {type(string).__name__}")
+
+    return string.split(delimiter, maxsplit)
+
+
+def str_join_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$str_join`` construct: join list of strings with separator.
+
+    Schema::
+
+        {"$str_join": {"array": <list>, "separator": <str>}}
+
+    Behavior:
+    * Joins array elements with separator
+    * All elements are converted to strings
+    * Returns string
+
+    Examples::
+
+        {"$str_join": {"array": ["a", "b", "c"], "separator": "-"}}  → "a-b-c"
+        {"$str_join": {"array": [1, 2, 3], "separator": ","}}  → "1,2,3"
+    """
+    spec = node["$str_join"]
+    if isinstance(spec, str):
+        raise ValueError("$str_join requires a dict with 'array' and 'separator'")
+
+    array = ctx.engine.process_value(spec.get("array", []), ctx)
+    separator = ctx.engine.process_value(spec.get("separator", ""), ctx)
+
+    if not isinstance(array, (list, tuple)):
+        raise ValueError(f"$str_join 'array' must be a list, got {type(array).__name__}")
+
+    return separator.join(str(item) for item in array)
+
+
+def str_slice_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$str_slice`` construct: extract substring using slice notation.
+
+    Schema::
+
+        {"$str_slice": {"string": <str>, "start": <int>, "end": <int>}}
+        {"$str_slice": {"string": <str>, "start": <int>}}
+        {"$str_slice": {"string": <str>, "end": <int>}}
+
+    Behavior:
+    * Extracts substring using Python slice notation
+    * start: starting index (default: 0)
+    * end: ending index (default: None, end of string)
+    * Supports negative indices
+
+    Examples::
+
+        {"$str_slice": {"string": "hello", "start": 1, "end": 4}}  → "ell"
+        {"$str_slice": {"string": "hello", "start": 2}}  → "llo"
+        {"$str_slice": {"string": "hello", "end": 3}}  → "hel"
+        {"$str_slice": {"string": "hello", "start": -3}}  → "llo"
+    """
+    spec = node["$str_slice"]
+    if isinstance(spec, str):
+        raise ValueError("$str_slice requires a dict with 'string' and slice parameters")
+
+    string = ctx.engine.process_value(spec.get("string", ""), ctx)
+    start = ctx.engine.process_value(spec.get("start"), ctx)
+    end = ctx.engine.process_value(spec.get("end"), ctx)
+
+    if not isinstance(string, str):
+        raise ValueError(f"$str_slice 'string' must be a string, got {type(string).__name__}")
+
+    return string[start:end]
+
+
+def str_upper_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$str_upper`` construct: convert string to uppercase.
+
+    Schema::
+
+        {"$str_upper": <string>}
+
+    Examples::
+
+        {"$str_upper": "hello"}  → "HELLO"
+        {"$str_upper": "${/text}"}  → uppercased text
+    """
+    string = ctx.engine.process_value(node["$str_upper"], ctx)
+
+    if not isinstance(string, str):
+        raise ValueError(f"$str_upper requires a string, got {type(string).__name__}")
+
+    return string.upper()
+
+
+def str_lower_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$str_lower`` construct: convert string to lowercase.
+
+    Schema::
+
+        {"$str_lower": <string>}
+
+    Examples::
+
+        {"$str_lower": "HELLO"}  → "hello"
+        {"$str_lower": "${/text}"}  → lowercased text
+    """
+    string = ctx.engine.process_value(node["$str_lower"], ctx)
+
+    if not isinstance(string, str):
+        raise ValueError(f"$str_lower requires a string, got {type(string).__name__}")
+
+    return string.lower()
+
+
+def str_strip_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$str_strip`` construct: remove leading and trailing characters.
+
+    Schema::
+
+        {"$str_strip": <string>}  // strips whitespace
+        {"$str_strip": {"string": <str>, "chars": <str>}}  // strips specified chars
+
+    Behavior:
+    * Removes leading and trailing characters
+    * chars: characters to remove (default: whitespace)
+
+    Examples::
+
+        {"$str_strip": "  hello  "}  → "hello"
+        {"$str_strip": {"string": "***hello***", "chars": "*"}}  → "hello"
+        {"$str_strip": {"string": "xyzabcxyz", "chars": "xyz"}}  → "abc"
+    """
+    spec = node["$str_strip"]
+
+    if isinstance(spec, str):
+        # Simple form: just strip whitespace
+        string = ctx.engine.process_value(spec, ctx)
+        if not isinstance(string, str):
+            raise ValueError(f"$str_strip requires a string, got {type(string).__name__}")
+        return string.strip()
+
+    # Dict form with chars parameter
+    string = ctx.engine.process_value(spec.get("string", ""), ctx)
+    chars = ctx.engine.process_value(spec.get("chars"), ctx)
+
+    if not isinstance(string, str):
+        raise ValueError(f"$str_strip 'string' must be a string, got {type(string).__name__}")
+
+    return string.strip(chars)
+
+
+def str_lstrip_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$str_lstrip`` construct: remove leading characters.
+
+    Schema::
+
+        {"$str_lstrip": <string>}  // strips whitespace
+        {"$str_lstrip": {"string": <str>, "chars": <str>}}
+
+    Examples::
+
+        {"$str_lstrip": "  hello  "}  → "hello  "
+        {"$str_lstrip": {"string": "___hello", "chars": "_"}}  → "hello"
+    """
+    spec = node["$str_lstrip"]
+
+    if isinstance(spec, str):
+        string = ctx.engine.process_value(spec, ctx)
+        if not isinstance(string, str):
+            raise ValueError(f"$str_lstrip requires a string, got {type(string).__name__}")
+        return string.lstrip()
+
+    string = ctx.engine.process_value(spec.get("string", ""), ctx)
+    chars = ctx.engine.process_value(spec.get("chars"), ctx)
+
+    if not isinstance(string, str):
+        raise ValueError(f"$str_lstrip 'string' must be a string, got {type(string).__name__}")
+
+    return string.lstrip(chars)
+
+
+def str_rstrip_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$str_rstrip`` construct: remove trailing characters.
+
+    Schema::
+
+        {"$str_rstrip": <string>}  // strips whitespace
+        {"$str_rstrip": {"string": <str>, "chars": <str>}}
+
+    Examples::
+
+        {"$str_rstrip": "  hello  "}  → "  hello"
+        {"$str_rstrip": {"string": "hello___", "chars": "_"}}  → "hello"
+    """
+    spec = node["$str_rstrip"]
+
+    if isinstance(spec, str):
+        string = ctx.engine.process_value(spec, ctx)
+        if not isinstance(string, str):
+            raise ValueError(f"$str_rstrip requires a string, got {type(string).__name__}")
+        return string.rstrip()
+
+    string = ctx.engine.process_value(spec.get("string", ""), ctx)
+    chars = ctx.engine.process_value(spec.get("chars"), ctx)
+
+    if not isinstance(string, str):
+        raise ValueError(f"$str_rstrip 'string' must be a string, got {type(string).__name__}")
+
+    return string.rstrip(chars)
+
+
+def str_replace_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$str_replace`` construct: replace substring.
+
+    Schema::
+
+        {"$str_replace": {"string": <str>, "old": <str>, "new": <str>}}
+        {"$str_replace": {"string": <str>, "old": <str>, "new": <str>, "count": <int>}}
+
+    Behavior:
+    * Replaces occurrences of old substring with new substring
+    * count: max number of replacements (default: all)
+
+    Examples::
+
+        {"$str_replace": {"string": "hello", "old": "ll", "new": "rr"}}  → "herro"
+        {"$str_replace": {"string": "aaa", "old": "a", "new": "b", "count": 2}}  → "bba"
+    """
+    spec = node["$str_replace"]
+
+    string = ctx.engine.process_value(spec.get("string", ""), ctx)
+    old = ctx.engine.process_value(spec["old"], ctx)
+    new = ctx.engine.process_value(spec["new"], ctx)
+    count = ctx.engine.process_value(spec.get("count", -1), ctx)
+
+    if not isinstance(string, str):
+        raise ValueError(f"$str_replace 'string' must be a string, got {type(string).__name__}")
+
+    return string.replace(old, new, count)
+
+
+def str_contains_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$str_contains`` construct: check if string contains substring.
+
+    Schema::
+
+        {"$str_contains": {"string": <str>, "substring": <str>}}
+
+    Examples::
+
+        {"$str_contains": {"string": "hello world", "substring": "world"}}  → True
+        {"$str_contains": {"string": "hello", "substring": "x"}}  → False
+    """
+    spec = node["$str_contains"]
+
+    string = ctx.engine.process_value(spec.get("string", ""), ctx)
+    substring = ctx.engine.process_value(spec["substring"], ctx)
+
+    if not isinstance(string, str):
+        raise ValueError(f"$str_contains 'string' must be a string, got {type(string).__name__}")
+
+    return substring in string
+
+
+def str_startswith_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$str_startswith`` construct: check if string starts with prefix.
+
+    Schema::
+
+        {"$str_startswith": {"string": <str>, "prefix": <str>}}
+
+    Examples::
+
+        {"$str_startswith": {"string": "hello", "prefix": "he"}}  → True
+        {"$str_startswith": {"string": "hello", "prefix": "x"}}  → False
+    """
+    spec = node["$str_startswith"]
+
+    string = ctx.engine.process_value(spec.get("string", ""), ctx)
+    prefix = ctx.engine.process_value(spec["prefix"], ctx)
+
+    if not isinstance(string, str):
+        raise ValueError(f"$str_startswith 'string' must be a string, got {type(string).__name__}")
+
+    return string.startswith(prefix)
+
+
+def str_endswith_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$str_endswith`` construct: check if string ends with suffix.
+
+    Schema::
+
+        {"$str_endswith": {"string": <str>, "suffix": <str>}}
+
+    Examples::
+
+        {"$str_endswith": {"string": "hello", "suffix": "lo"}}  → True
+        {"$str_endswith": {"string": "hello", "suffix": "x"}}  → False
+    """
+    spec = node["$str_endswith"]
+
+    string = ctx.engine.process_value(spec.get("string", ""), ctx)
+    suffix = ctx.engine.process_value(spec["suffix"], ctx)
+
+    if not isinstance(string, str):
+        raise ValueError(f"$str_endswith 'string' must be a string, got {type(string).__name__}")
+
+    return string.endswith(suffix)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Regular expressions
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def regex_match_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$regex_match`` construct: check if string matches regex pattern.
+
+    Schema::
+
+        {"$regex_match": {"pattern": <str>, "string": <str>}}
+        {"$regex_match": {"pattern": <str>, "string": <str>, "flags": <int>}}
+
+    Behavior:
+    * Checks if entire string matches the pattern (using re.fullmatch)
+    * Returns True/False
+    * Optional flags parameter (e.g., re.IGNORECASE)
+
+    Examples::
+
+        {"$regex_match": {"pattern": "^\\\\d+$", "string": "123"}}  → True
+        {"$regex_match": {"pattern": "^\\\\d+$", "string": "abc"}}  → False
+        {"$regex_match": {"pattern": "^hello$", "string": "HELLO", "flags": 2}}  → True (IGNORECASE)
+    """
+    spec = node["$regex_match"]
+
+    pattern = ctx.engine.process_value(spec["pattern"], ctx)
+    string = ctx.engine.process_value(spec.get("string", ""), ctx)
+    flags = ctx.engine.process_value(spec.get("flags", 0), ctx)
+
+    if not isinstance(string, str):
+        raise ValueError(f"$regex_match 'string' must be a string, got {type(string).__name__}")
+
+    return bool(re.fullmatch(pattern, string, flags))
+
+
+def regex_search_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$regex_search`` construct: search for first occurrence of pattern.
+
+    Schema::
+
+        {"$regex_search": {"pattern": <str>, "string": <str>}}
+        {"$regex_search": {"pattern": <str>, "string": <str>, "flags": <int>}}
+
+    Behavior:
+    * Searches for first occurrence of pattern in string
+    * Returns the matched string, or None if not found
+
+    Examples::
+
+        {"$regex_search": {"pattern": "\\\\d+", "string": "abc123def"}}  → "123"
+        {"$regex_search": {"pattern": "\\\\d+", "string": "abc"}}  → None
+    """
+    spec = node["$regex_search"]
+
+    pattern = ctx.engine.process_value(spec["pattern"], ctx)
+    string = ctx.engine.process_value(spec.get("string", ""), ctx)
+    flags = ctx.engine.process_value(spec.get("flags", 0), ctx)
+
+    if not isinstance(string, str):
+        raise ValueError(f"$regex_search 'string' must be a string, got {type(string).__name__}")
+
+    match = re.search(pattern, string, flags)
+    return match.group(0) if match else None
+
+
+def regex_findall_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$regex_findall`` construct: find all occurrences of pattern.
+
+    Schema::
+
+        {"$regex_findall": {"pattern": <str>, "string": <str>}}
+        {"$regex_findall": {"pattern": <str>, "string": <str>, "flags": <int>}}
+
+    Behavior:
+    * Finds all non-overlapping occurrences of pattern
+    * Returns list of matched strings
+
+    Examples::
+
+        {"$regex_findall": {"pattern": "\\\\d+", "string": "a1b2c3"}}  → ["1", "2", "3"]
+        {"$regex_findall": {"pattern": "\\\\d+", "string": "abc"}}  → []
+    """
+    spec = node["$regex_findall"]
+
+    pattern = ctx.engine.process_value(spec["pattern"], ctx)
+    string = ctx.engine.process_value(spec.get("string", ""), ctx)
+    flags = ctx.engine.process_value(spec.get("flags", 0), ctx)
+
+    if not isinstance(string, str):
+        raise ValueError(f"$regex_findall 'string' must be a string, got {type(string).__name__}")
+
+    return re.findall(pattern, string, flags)
+
+
+def regex_replace_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$regex_replace`` construct: replace pattern matches in string.
+
+    Schema::
+
+        {"$regex_replace": {"pattern": <str>, "replacement": <str>, "string": <str>}}
+        {"$regex_replace": {"pattern": <str>, "replacement": <str>, "string": <str>, "count": <int>}}
+        {"$regex_replace": {"pattern": <str>, "replacement": <str>, "string": <str>, "flags": <int>}}
+
+    Behavior:
+    * Replaces occurrences of pattern with replacement
+    * count: max number of replacements (default: all)
+    * Supports backreferences in replacement (\\1, \\2, etc.)
+
+    Examples::
+
+        {"$regex_replace": {"pattern": "\\\\d+", "replacement": "X", "string": "a1b2c3"}}  → "aXbXcX"
+        {"$regex_replace": {"pattern": "(\\\\w+)@(\\\\w+)", "replacement": "\\\\1 AT \\\\2", "string": "user@domain"}}  → "user AT domain"
+        {"$regex_replace": {"pattern": "\\\\d+", "replacement": "X", "string": "a1b2c3", "count": 2}}  → "aXbXc3"
+    """
+    spec = node["$regex_replace"]
+
+    pattern = ctx.engine.process_value(spec["pattern"], ctx)
+    replacement = ctx.engine.process_value(spec["replacement"], ctx)
+    string = ctx.engine.process_value(spec.get("string", ""), ctx)
+    count = ctx.engine.process_value(spec.get("count", 0), ctx)
+    flags = ctx.engine.process_value(spec.get("flags", 0), ctx)
+
+    if not isinstance(string, str):
+        raise ValueError(f"$regex_replace 'string' must be a string, got {type(string).__name__}")
+
+    return re.sub(pattern, replacement, string, count, flags)
+
+
+def regex_groups_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$regex_groups`` construct: extract capture groups from pattern match.
+
+    Schema::
+
+        {"$regex_groups": {"pattern": <str>, "string": <str>}}
+        {"$regex_groups": {"pattern": <str>, "string": <str>, "flags": <int>}}
+
+    Behavior:
+    * Searches for pattern and returns list of captured groups
+    * Returns empty list if no match found
+    * Does not include group 0 (full match)
+
+    Examples::
+
+        {"$regex_groups": {"pattern": "(\\\\w+)@(\\\\w+)", "string": "user@domain"}}  → ["user", "domain"]
+        {"$regex_groups": {"pattern": "(\\\\d+)-(\\\\d+)", "string": "123-456"}}  → ["123", "456"]
+        {"$regex_groups": {"pattern": "\\\\d+", "string": "abc"}}  → []
+    """
+    spec = node["$regex_groups"]
+
+    pattern = ctx.engine.process_value(spec["pattern"], ctx)
+    string = ctx.engine.process_value(spec.get("string", ""), ctx)
+    flags = ctx.engine.process_value(spec.get("flags", 0), ctx)
+
+    if not isinstance(string, str):
+        raise ValueError(f"$regex_groups 'string' must be a string, got {type(string).__name__}")
+
+    match = re.search(pattern, string, flags)
+    return list(match.groups()) if match else []
 
 
 def make_cast_handler(casters: Mapping[str, Any]) -> Any:

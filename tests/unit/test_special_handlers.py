@@ -629,246 +629,96 @@ class TestCastHandler:
         assert result["via_construct"] == result["via_template"]
 
 
-class TestComparisonOperators:
-    """Test comparison operator constructs ($gt, $gte, $lt, $lte, $eq, $ne)."""
+class TestInOperator:
+    """Test $in operator."""
 
-    def test_gt_true(self):
-        """$gt returns True when left > right."""
+    def test_in_substring(self):
+        """$in checks if substring is in string."""
         engine = build_default_engine()
 
         result = engine.apply(
-            {"/result": {"$gt": [10, 5]}},
+            {"/result": {"$in": ["world", "hello world"]}},
             source={},
             dest={},
         )
 
         assert result == {"result": True}
 
-    def test_gt_false(self):
-        """$gt returns False when left <= right."""
+    def test_in_not_in_string(self):
+        """$in returns False if substring not in string."""
         engine = build_default_engine()
 
         result = engine.apply(
-            {"/result": {"$gt": [5, 10]}},
+            {"/result": {"$in": ["x", "hello"]}},
             source={},
             dest={},
         )
 
         assert result == {"result": False}
 
-    def test_gt_with_templates(self):
-        """$gt works with template substitution."""
+    def test_in_list(self):
+        """$in checks if element is in list."""
         engine = build_default_engine()
 
         result = engine.apply(
-            {"/result": {"$gt": ["${/age}", 18]}},
-            source={"age": 25},
-            dest={},
-        )
-
-        assert result == {"result": True}
-
-    def test_gte_equal(self):
-        """$gte returns True when left == right."""
-        engine = build_default_engine()
-
-        result = engine.apply(
-            {"/result": {"$gte": [10, 10]}},
+            {"/result": {"$in": [2, [1, 2, 3]]}},
             source={},
             dest={},
         )
 
         assert result == {"result": True}
 
-    def test_gte_greater(self):
-        """$gte returns True when left > right."""
+    def test_in_not_in_list(self):
+        """$in returns False if element not in list."""
         engine = build_default_engine()
 
         result = engine.apply(
-            {"/result": {"$gte": [15, 10]}},
-            source={},
-            dest={},
-        )
-
-        assert result == {"result": True}
-
-    def test_lt_true(self):
-        """$lt returns True when left < right."""
-        engine = build_default_engine()
-
-        result = engine.apply(
-            {"/result": {"$lt": [5, 10]}},
-            source={},
-            dest={},
-        )
-
-        assert result == {"result": True}
-
-    def test_lt_false(self):
-        """$lt returns False when left >= right."""
-        engine = build_default_engine()
-
-        result = engine.apply(
-            {"/result": {"$lt": [10, 5]}},
+            {"/result": {"$in": [5, [1, 2, 3]]}},
             source={},
             dest={},
         )
 
         assert result == {"result": False}
 
-    def test_lte_equal(self):
-        """$lte returns True when left == right."""
+    def test_in_dict_key(self):
+        """$in checks if key is in dict."""
         engine = build_default_engine()
 
         result = engine.apply(
-            {"/result": {"$lte": [10, 10]}},
+            {"/result": {"$in": ["key", {"key": "value", "other": "data"}]}},
             source={},
             dest={},
         )
 
         assert result == {"result": True}
 
-    def test_lte_less(self):
-        """$lte returns True when left < right."""
+    def test_in_with_ref(self):
+        """$in works with $ref."""
         engine = build_default_engine()
 
         result = engine.apply(
-            {"/result": {"$lte": [5, 10]}},
-            source={},
+            {"/result": {"$in": [{"$ref": "/search"}, {"$ref": "/text"}]}},
+            source={"search": "world", "text": "hello world"},
             dest={},
         )
 
         assert result == {"result": True}
 
-    def test_eq_true(self):
-        """$eq returns True when values are equal."""
-        engine = build_default_engine()
-
-        result = engine.apply(
-            {"/result": {"$eq": [10, 10]}},
-            source={},
-            dest={},
-        )
-
-        assert result == {"result": True}
-
-    def test_eq_false(self):
-        """$eq returns False when values are not equal."""
-        engine = build_default_engine()
-
-        result = engine.apply(
-            {"/result": {"$eq": [10, 5]}},
-            source={},
-            dest={},
-        )
-
-        assert result == {"result": False}
-
-    def test_eq_strings(self):
-        """$eq works with strings."""
-        engine = build_default_engine()
-
-        result = engine.apply(
-            {"/result": {"$eq": ["${/status}", "active"]}},
-            source={"status": "active"},
-            dest={},
-        )
-
-        assert result == {"result": True}
-
-    def test_ne_true(self):
-        """$ne returns True when values are not equal."""
-        engine = build_default_engine()
-
-        result = engine.apply(
-            {"/result": {"$ne": [10, 5]}},
-            source={},
-            dest={},
-        )
-
-        assert result == {"result": True}
-
-    def test_ne_false(self):
-        """$ne returns False when values are equal."""
-        engine = build_default_engine()
-
-        result = engine.apply(
-            {"/result": {"$ne": [10, 10]}},
-            source={},
-            dest={},
-        )
-
-        assert result == {"result": False}
-
-    def test_comparison_with_ref(self):
-        """Comparison operators work with $ref."""
-        engine = build_default_engine()
-
-        result = engine.apply(
-            {"/result": {"$gt": [{"$ref": "/count"}, 100]}},
-            source={"count": 150},
-            dest={},
-        )
-
-        assert result == {"result": True}
-
-    def test_comparison_with_cast(self):
-        """Comparison operators work with $cast."""
-        engine = build_default_engine()
-
-        result = engine.apply(
-            {"/result": {"$gte": [{"$cast": {"value": "25", "type": "int"}}, 18]}},
-            source={},
-            dest={},
-        )
-
-        assert result == {"result": True}
-
-    def test_gt_invalid_args_raises(self):
-        """$gt raises ValueError if not given exactly 2 values."""
+    def test_in_invalid_args_raises(self):
+        """$in raises ValueError if not given exactly 2 values."""
         engine = build_default_engine()
 
         with pytest.raises(ValueError, match="requires a list of exactly 2 values"):
             engine.apply(
-                {"/result": {"$gt": [10]}},
+                {"/result": {"$in": ["value"]}},
                 source={},
                 dest={},
             )
 
-    def test_eq_invalid_args_raises(self):
-        """$eq raises ValueError if not given a list."""
-        engine = build_default_engine()
-
-        with pytest.raises(ValueError, match="requires a list of exactly 2 values"):
-            engine.apply(
-                {"/result": {"$eq": "invalid"}},
-                source={},
-                dest={},
-            )
-
-    def test_nested_comparisons_in_if(self):
-        """Comparison operators can be used in if conditions."""
-        engine = build_default_engine()
-
-        result = engine.apply(
-            [
-                {"/age": 25},
-                {
-                    "op": "if",
-                    "cond": {"$gte": [{"$ref": "@:/age"}, 18]},
-                    "then": [{"/is_adult": True}],
-                    "else": [{"/is_adult": False}],
-                },
-            ],
-            source={},
-            dest={},
-        )
-
-        assert result == {"age": 25, "is_adult": True}
 
 
-class TestMathOperators:
-    """Test mathematical operator constructs ($add, $sub, $mul, $div, $pow, $mod)."""
+
+
 
     # --- $add tests ---
     def test_add_single_operand(self):

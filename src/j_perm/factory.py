@@ -29,6 +29,16 @@ from .handlers.constructs import (
     make_cast_handler,
     gt_handler, gte_handler, lt_handler, lte_handler, eq_handler, ne_handler,
     add_handler, sub_handler, mul_handler, div_handler, pow_handler, mod_handler,
+    in_handler,
+    # String operations
+    str_split_handler, str_join_handler, str_slice_handler,
+    str_upper_handler, str_lower_handler,
+    str_strip_handler, str_lstrip_handler, str_rstrip_handler,
+    str_replace_handler, str_contains_handler,
+    str_startswith_handler, str_endswith_handler,
+    # Regex operations
+    regex_match_handler, regex_search_handler, regex_findall_handler,
+    regex_replace_handler, regex_groups_handler,
 )
 from .handlers.container import ContainerMatcher, RecursiveDescentHandler
 from .handlers.function import (
@@ -126,12 +136,32 @@ def build_default_engine(
             "$lte": lte_handler,
             "$eq": eq_handler,
             "$ne": ne_handler,
+            "$in": in_handler,
             "$add": add_handler,
             "$sub": sub_handler,
             "$mul": mul_handler,
             "$div": div_handler,
             "$pow": pow_handler,
             "$mod": mod_handler,
+            # String operations
+            "$str_split": str_split_handler,
+            "$str_join": str_join_handler,
+            "$str_slice": str_slice_handler,
+            "$str_upper": str_upper_handler,
+            "$str_lower": str_lower_handler,
+            "$str_strip": str_strip_handler,
+            "$str_lstrip": str_lstrip_handler,
+            "$str_rstrip": str_rstrip_handler,
+            "$str_replace": str_replace_handler,
+            "$str_contains": str_contains_handler,
+            "$str_startswith": str_startswith_handler,
+            "$str_endswith": str_endswith_handler,
+            # Regex operations
+            "$regex_match": regex_match_handler,
+            "$regex_search": regex_search_handler,
+            "$regex_findall": regex_findall_handler,
+            "$regex_replace": regex_replace_handler,
+            "$regex_groups": regex_groups_handler,
         }
 
     # -- value pipeline -----------------------------------------------------

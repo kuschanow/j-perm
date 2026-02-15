@@ -132,13 +132,13 @@ class PointerResolver(ValueResolver):
         return cur
 
     def _maybe_slice(self, ptr: str, src: Any) -> Any:
-        """Resolve a pointer and optional Python-style slice suffix ``[start:end]`` for arrays."""
+        """Resolve a pointer and optional Python-style slice suffix ``[start:end]`` for arrays and strings."""
         m = self._SLICE_RE.match(ptr)
         if m:
             base, s, e = m.groups()
             seq = self._get_pointer(src, base)
-            if not isinstance(seq, (list, tuple)):
-                raise TypeError(f"{base} is not a list (slice requested)")
+            if not isinstance(seq, (list, tuple, str)):
+                raise TypeError(f"{base} is not a list, tuple, or string (slice requested)")
 
             start = int(s) if s else None
             end = int(e) if e else None

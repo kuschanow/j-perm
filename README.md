@@ -3,7 +3,7 @@
 A composable JSON transformation DSL with a powerful, extensible architecture.
 
 J-Perm lets you describe data transformations as **executable specifications** — a list of steps that can be applied to input documents. It supports
-JSON Pointer addressing, template interpolation with `${...}` syntax, special constructs (`$ref`, `$eval`, `$cast`, logical and comparison operators), and a rich set of built-in operations.
+JSON Pointer addressing with slicing (arrays and strings), template interpolation with `${...}` syntax, special constructs (`$ref`, `$eval`, `$cast`), logical and comparison operators, mathematical operations, comprehensive string manipulation (11 operations), regular expressions (5 operations), and a rich set of built-in operations.
 
 ---
 
@@ -160,8 +160,10 @@ resolver.get("/", "text")  # → "text"
 # Parent navigation
 resolver.get("/a/b/../c", data)  # → data["a"]["c"]
 
-# List slices
-resolver.get("/items[1:3]", data)  # → [item1, item2]
+# Slices (work on lists and strings)
+resolver.get("/items[1:3]", data)  # → [item1, item2] for lists
+resolver.get("/text[0:5]", {"text": "hello world"})  # → "hello" for strings
+resolver.get("/text[-5:]", {"text": "hello world"})  # → "world" (negative indices)
 
 # Append notation
 resolver.set("/items/-", data, "new")  # Append to list
@@ -546,6 +548,144 @@ spec = {
 - Values are processed through `process_value` (support templates, `$ref`, `$cast`, etc.)
 - Can be nested to create complex expressions
 - Work seamlessly with comparison operators in conditions
+
+#### Membership Test Operator
+
+**`$in` — Python-style membership test**
+
+Works with strings (substring), lists (element), and dicts (key):
+
+```json
+{"$in": ["world", "hello world"]}  → true (substring)
+{"$in": [2, [1, 2, 3]]}             → true (element in list)
+{"$in": ["key", {"key": "val"}]}    → true (key in dict)
+```
+
+---
+
+### 4. String Operations
+
+J-Perm provides comprehensive string manipulation constructs:
+
+#### Split and Join
+
+```python
+# Split string by delimiter
+{"$str_split": {"string": "a,b,c", "delimiter": ","}}  → ["a", "b", "c"]
+{"$str_split": {"string": "a:b:c", "delimiter": ":", "maxsplit": 1}}  → ["a", "b:c"]
+
+# Join array into string
+{"$str_join": {"array": ["a", "b", "c"], "separator": "-"}}  → "a-b-c"
+{"$str_join": {"array": [1, 2, 3], "separator": ","}}  → "1,2,3"
+```
+
+#### Slicing
+
+```python
+# Extract substring
+{"$str_slice": {"string": "hello", "start": 1, "end": 4}}  → "ell"
+{"$str_slice": {"string": "hello", "start": 2}}  → "llo"
+{"$str_slice": {"string": "hello", "end": 3}}  → "hel"
+{"$str_slice": {"string": "hello", "start": -3}}  → "llo"
+```
+
+**Note:** String slicing is also supported in JSON Pointer syntax:
+```python
+{"$ref": "/text[0:5]"}    # first 5 characters
+{"$ref": "/text[6:]"}     # from 6th character to end
+{"$ref": "/text[-5:]"}    # last 5 characters
+```
+
+#### Case Conversion
+
+```python
+{"$str_upper": "hello"}  → "HELLO"
+{"$str_lower": "HELLO"}  → "hello"
+```
+
+#### Trimming
+
+```python
+# Strip whitespace (default)
+{"$str_strip": "  hello  "}  → "hello"
+{"$str_lstrip": "  hello  "}  → "hello  "
+{"$str_rstrip": "  hello  "}  → "  hello"
+
+# Strip specific characters
+{"$str_strip": {"string": "***hello***", "chars": "*"}}  → "hello"
+{"$str_lstrip": {"string": "___hello", "chars": "_"}}  → "hello"
+{"$str_rstrip": {"string": "hello___", "chars": "_"}}  → "hello"
+```
+
+#### Replace
+
+```python
+{"$str_replace": {"string": "hello", "old": "ll", "new": "rr"}}  → "herro"
+{"$str_replace": {"string": "aaa", "old": "a", "new": "b", "count": 2}}  → "bba"
+```
+
+#### String Checks
+
+```python
+{"$str_contains": {"string": "hello world", "substring": "world"}}  → true
+{"$str_startswith": {"string": "hello", "prefix": "he"}}  → true
+{"$str_endswith": {"string": "hello", "suffix": "lo"}}  → true
+```
+
+---
+
+### 5. Regular Expressions
+
+J-Perm supports powerful regex operations using Python's `re` module:
+
+#### Match and Search
+
+```python
+# Check if entire string matches pattern
+{"$regex_match": {"pattern": "^\\d+$", "string": "123"}}  → true
+{"$regex_match": {"pattern": "^\\d+$", "string": "abc"}}  → false
+
+# Find first occurrence
+{"$regex_search": {"pattern": "\\d+", "string": "abc123def"}}  → "123"
+{"$regex_search": {"pattern": "\\d+", "string": "abc"}}  → null
+```
+
+#### Find All Matches
+
+```python
+{"$regex_findall": {"pattern": "\\d+", "string": "a1b2c3"}}  → ["1", "2", "3"]
+{"$regex_findall": {"pattern": "\\d+", "string": "abc"}}  → []
+```
+
+#### Replace with Regex
+
+```python
+# Simple replacement
+{"$regex_replace": {"pattern": "\\d+", "replacement": "X", "string": "a1b2c3"}}  → "aXbXcX"
+
+# With backreferences
+{"$regex_replace": {
+    "pattern": "(\\w+)@(\\w+)",
+    "replacement": "\\1 AT \\2",
+    "string": "user@domain"
+}}  → "user AT domain"
+
+# Limited replacements
+{"$regex_replace": {"pattern": "\\d+", "replacement": "X", "string": "a1b2c3", "count": 2}}  → "aXbXc3"
+```
+
+#### Extract Capture Groups
+
+```python
+{"$regex_groups": {"pattern": "(\\w+)@(\\w+)", "string": "user@domain"}}  → ["user", "domain"]
+{"$regex_groups": {"pattern": "(\\d+)-(\\d+)", "string": "123-456"}}  → ["123", "456"]
+```
+
+**Optional `flags` parameter:**
+All regex constructs accept optional `flags` parameter (e.g., `re.IGNORECASE = 2`):
+```python
+{"$regex_match": {"pattern": "^hello$", "string": "HELLO", "flags": 2}}  → true
+```
 
 ---
 
@@ -1192,6 +1332,60 @@ Or use the default built-in casters: `int`, `float`, `bool`, `str`.
 
 ---
 
+### Using Construct Groups
+
+J-Perm provides pre-organized groups of construct handlers for convenient registration:
+
+```python
+from j_perm import build_default_engine
+from j_perm import (
+    CORE_HANDLERS,         # $ref, $eval
+    LOGICAL_HANDLERS,      # $and, $or, $not
+    COMPARISON_HANDLERS,   # $gt, $gte, $lt, $lte, $eq, $ne, $in
+    MATH_HANDLERS,         # $add, $sub, $mul, $div, $pow, $mod
+    STRING_HANDLERS,       # All string operations (11 constructs)
+    REGEX_HANDLERS,        # All regex operations (5 constructs)
+    get_all_handlers,      # Function to get all handlers with casters
+)
+
+# Build engine with specific groups only
+engine = build_default_engine(specials={
+    **CORE_HANDLERS,
+    **STRING_HANDLERS,
+    **REGEX_HANDLERS,
+})
+
+# Or extend default engine with additional handlers
+from j_perm.casters import BUILTIN_CASTERS
+
+all_handlers = get_all_handlers(casters=BUILTIN_CASTERS)
+engine = build_default_engine(specials={
+    **all_handlers,
+    "$custom": my_custom_handler,
+})
+
+# Import individual handlers
+from j_perm import (
+    str_split_handler,
+    str_join_handler,
+    regex_match_handler,
+    add_handler,
+    # ... etc
+)
+```
+
+**Available groups:**
+- `CORE_HANDLERS` — Core constructs (`$ref`, `$eval`)
+- `LOGICAL_HANDLERS` — Logical operators (`$and`, `$or`, `$not`)
+- `COMPARISON_HANDLERS` — Comparison operators (`$gt`, `$gte`, `$lt`, `$lte`, `$eq`, `$ne`, `$in`)
+- `MATH_HANDLERS` — Mathematical operators (`$add`, `$sub`, `$mul`, `$div`, `$pow`, `$mod`)
+- `STRING_HANDLERS` — String operations (11 constructs)
+- `REGEX_HANDLERS` — Regular expression operations (5 constructs)
+- `ALL_HANDLERS_NO_CAST` — All handlers except `$cast`
+- `get_all_handlers(casters)` — Function returning all handlers including `$cast`
+
+---
+
 ### Custom Matchers
 
 Implement `ActionMatcher` or `StageMatcher`:
@@ -1537,6 +1731,7 @@ from j_perm import (
     lte_handler,
     eq_handler,
     ne_handler,
+    in_handler,
 
     # Mathematical operators
     add_handler,
@@ -1545,6 +1740,27 @@ from j_perm import (
     div_handler,
     pow_handler,
     mod_handler,
+
+    # String operations
+    str_split_handler,
+    str_join_handler,
+    str_slice_handler,
+    str_upper_handler,
+    str_lower_handler,
+    str_strip_handler,
+    str_lstrip_handler,
+    str_rstrip_handler,
+    str_replace_handler,
+    str_contains_handler,
+    str_startswith_handler,
+    str_endswith_handler,
+
+    # Regex operations
+    regex_match_handler,
+    regex_search_handler,
+    regex_findall_handler,
+    regex_replace_handler,
+    regex_groups_handler,
 
     # Function handlers
     DefMatcher,
