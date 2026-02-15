@@ -314,6 +314,186 @@ def ne_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
     return left != right
 
 
+def add_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$add`` construct: addition.
+
+    Schema::
+
+        {"$add": [<value1>, <value2>, ...]}
+
+    Behavior:
+    * All values are processed through ``process_value``
+    * With 1 operand: returns the value itself
+    * With 2+ operands: returns value1 + value2 + ... (left-to-right)
+
+    Examples::
+
+        {"$add": [10]}                                → 10
+        {"$add": [10, 5]}                             → 15
+        {"$add": [1, 2, 3, 4]}                        → 10
+        {"$add": ["${/a}", {"$ref": "/b"}, 5]}        → a + b + 5
+    """
+    if not isinstance(node["$add"], list) or len(node["$add"]) < 1:
+        raise ValueError("$add requires a list of at least 1 value")
+
+    values = [ctx.engine.process_value(v, ctx) for v in node["$add"]]
+
+    result = values[0]
+    for val in values[1:]:
+        result = result + val
+    return result
+
+
+def sub_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$sub`` construct: subtraction.
+
+    Schema::
+
+        {"$sub": [<value1>, <value2>, ...]}
+
+    Behavior:
+    * All values are processed through ``process_value``
+    * With 1 operand: returns the value itself
+    * With 2+ operands: returns value1 - value2 - ... (left-to-right)
+
+    Examples::
+
+        {"$sub": [10]}                                → 10
+        {"$sub": [10, 5]}                             → 5
+        {"$sub": [100, 20, 10]}                       → 70
+        {"$sub": ["${/total}", {"$ref": "/discount"}]} → total - discount
+    """
+    if not isinstance(node["$sub"], list) or len(node["$sub"]) < 1:
+        raise ValueError("$sub requires a list of at least 1 value")
+
+    values = [ctx.engine.process_value(v, ctx) for v in node["$sub"]]
+
+    result = values[0]
+    for val in values[1:]:
+        result = result - val
+    return result
+
+
+def mul_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$mul`` construct: multiplication.
+
+    Schema::
+
+        {"$mul": [<value1>, <value2>, ...]}
+
+    Behavior:
+    * All values are processed through ``process_value``
+    * With 1 operand: returns the value itself
+    * With 2+ operands: returns value1 * value2 * ... (left-to-right)
+
+    Examples::
+
+        {"$mul": [5]}                                 → 5
+        {"$mul": [10, 5]}                             → 50
+        {"$mul": [2, 3, 4]}                           → 24
+        {"$mul": ["${/price}", {"$ref": "/quantity"}]} → price * quantity
+    """
+    if not isinstance(node["$mul"], list) or len(node["$mul"]) < 1:
+        raise ValueError("$mul requires a list of at least 1 value")
+
+    values = [ctx.engine.process_value(v, ctx) for v in node["$mul"]]
+
+    result = values[0]
+    for val in values[1:]:
+        result = result * val
+    return result
+
+
+def div_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$div`` construct: division.
+
+    Schema::
+
+        {"$div": [<value1>, <value2>, ...]}
+
+    Behavior:
+    * All values are processed through ``process_value``
+    * With 1 operand: returns the value itself
+    * With 2+ operands: returns value1 / value2 / ... (left-to-right)
+
+    Examples::
+
+        {"$div": [10]}                                → 10
+        {"$div": [10, 5]}                             → 2.0
+        {"$div": [100, 2, 5]}                         → 10.0
+        {"$div": ["${/total}", {"$ref": "/count"}]}   → total / count
+    """
+    if not isinstance(node["$div"], list) or len(node["$div"]) < 1:
+        raise ValueError("$div requires a list of at least 1 value")
+
+    values = [ctx.engine.process_value(v, ctx) for v in node["$div"]]
+
+    result = values[0]
+    for val in values[1:]:
+        result = result / val
+    return result
+
+
+def pow_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$pow`` construct: exponentiation.
+
+    Schema::
+
+        {"$pow": [<value1>, <value2>, ...]}
+
+    Behavior:
+    * All values are processed through ``process_value``
+    * With 1 operand: returns the value itself
+    * With 2+ operands: returns value1 ** value2 ** ... (left-to-right)
+
+    Examples::
+
+        {"$pow": [2]}                                 → 2
+        {"$pow": [2, 3]}                              → 8
+        {"$pow": [2, 3, 2]}                           → 64  (i.e., (2 ** 3) ** 2)
+        {"$pow": ["${/base}", {"$ref": "/exponent"}]} → base ** exponent
+    """
+    if not isinstance(node["$pow"], list) or len(node["$pow"]) < 1:
+        raise ValueError("$pow requires a list of at least 1 value")
+
+    values = [ctx.engine.process_value(v, ctx) for v in node["$pow"]]
+
+    result = values[0]
+    for val in values[1:]:
+        result = result ** val
+    return result
+
+
+def mod_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$mod`` construct: modulo.
+
+    Schema::
+
+        {"$mod": [<value1>, <value2>, ...]}
+
+    Behavior:
+    * All values are processed through ``process_value``
+    * With 1 operand: returns the value itself
+    * With 2+ operands: returns value1 % value2 % ... (left-to-right)
+
+    Examples::
+
+        {"$mod": [10]}                                → 10
+        {"$mod": [10, 3]}                             → 1
+        {"$mod": [100, 7, 3]}                         → 2  (i.e., (100 % 7) % 3)
+        {"$mod": ["${/value}", {"$ref": "/divisor"}]} → value % divisor
+    """
+    if not isinstance(node["$mod"], list) or len(node["$mod"]) < 1:
+        raise ValueError("$mod requires a list of at least 1 value")
+
+    values = [ctx.engine.process_value(v, ctx) for v in node["$mod"]]
+
+    result = values[0]
+    for val in values[1:]:
+        result = result % val
+    return result
+
+
 def make_cast_handler(casters: Mapping[str, Any]) -> Any:
     """Factory function that creates a cast handler with registered casters.
 

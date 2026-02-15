@@ -28,6 +28,7 @@ from .handlers.constructs import (
     ref_handler, eval_handler, and_handler, or_handler, not_handler,
     make_cast_handler,
     gt_handler, gte_handler, lt_handler, lte_handler, eq_handler, ne_handler,
+    add_handler, sub_handler, mul_handler, div_handler, pow_handler, mod_handler,
 )
 from .handlers.container import ContainerMatcher, RecursiveDescentHandler
 from .handlers.function import (
@@ -73,7 +74,8 @@ def build_default_engine(
 
     value_pipeline
         * ``SpecialResolveHandler``   (priority 10)  – ``$ref``, ``$eval``, ``$cast``,
-          ``$and``, ``$or``, ``$not``, ``$gt``, ``$gte``, ``$lt``, ``$lte``, ``$eq``, ``$ne``.
+          ``$and``, ``$or``, ``$not``, ``$gt``, ``$gte``, ``$lt``, ``$lte``, ``$eq``, ``$ne``,
+          ``$add``, ``$sub``, ``$mul``, ``$div``, ``$pow``, ``$mod``.
         * ``TemplSubstHandler``       (priority  8)  – ``${…}`` with built-in
           casters (int, float, bool, str), JMESPath function (subtract), and
           dest pointer (@:/path).
@@ -124,6 +126,12 @@ def build_default_engine(
             "$lte": lte_handler,
             "$eq": eq_handler,
             "$ne": ne_handler,
+            "$add": add_handler,
+            "$sub": sub_handler,
+            "$mul": mul_handler,
+            "$div": div_handler,
+            "$pow": pow_handler,
+            "$mod": mod_handler,
         }
 
     # -- value pipeline -----------------------------------------------------

@@ -1,4 +1,4 @@
-"""Tests for special construct handlers ($ref, $eval, $cast, comparison operators)."""
+"""Tests for special construct handlers ($ref, $eval, $cast, comparison operators, math operators)."""
 
 import pytest
 from j_perm import build_default_engine
@@ -865,4 +865,321 @@ class TestComparisonOperators:
         )
 
         assert result == {"age": 25, "is_adult": True}
+
+
+class TestMathOperators:
+    """Test mathematical operator constructs ($add, $sub, $mul, $div, $pow, $mod)."""
+
+    # --- $add tests ---
+    def test_add_single_operand(self):
+        """$add with single operand returns the value."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$add": [42]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": 42}
+
+    def test_add_two_operands(self):
+        """$add with two operands."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$add": [10, 5]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": 15}
+
+    def test_add_multiple_operands(self):
+        """$add with multiple operands."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$add": [1, 2, 3, 4]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": 10}
+
+    def test_add_with_templates(self):
+        """$add works with template substitution."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$add": ["${/a}", {"$ref": "/b"}, 5]}},
+            source={"a": 10, "b": 20},
+            dest={},
+        )
+
+        assert result == {"result": 35}
+
+    # --- $sub tests ---
+    def test_sub_single_operand(self):
+        """$sub with single operand returns the value."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$sub": [42]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": 42}
+
+    def test_sub_two_operands(self):
+        """$sub with two operands."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$sub": [10, 5]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": 5}
+
+    def test_sub_multiple_operands(self):
+        """$sub with multiple operands (left-to-right)."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$sub": [100, 20, 10]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": 70}  # (100 - 20) - 10
+
+    # --- $mul tests ---
+    def test_mul_single_operand(self):
+        """$mul with single operand returns the value."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$mul": [7]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": 7}
+
+    def test_mul_two_operands(self):
+        """$mul with two operands."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$mul": [10, 5]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": 50}
+
+    def test_mul_multiple_operands(self):
+        """$mul with multiple operands."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$mul": [2, 3, 4]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": 24}  # ((2 * 3) * 4)
+
+    # --- $div tests ---
+    def test_div_single_operand(self):
+        """$div with single operand returns the value."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$div": [10]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": 10}
+
+    def test_div_two_operands(self):
+        """$div with two operands."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$div": [10, 5]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": 2.0}
+
+    def test_div_multiple_operands(self):
+        """$div with multiple operands (left-to-right)."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$div": [100, 2, 5]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": 10.0}  # ((100 / 2) / 5)
+
+    # --- $pow tests ---
+    def test_pow_single_operand(self):
+        """$pow with single operand returns the value."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$pow": [3]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": 3}
+
+    def test_pow_two_operands(self):
+        """$pow with two operands."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$pow": [2, 3]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": 8}
+
+    def test_pow_multiple_operands(self):
+        """$pow with multiple operands (left-to-right)."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$pow": [2, 3, 2]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": 64}  # ((2 ** 3) ** 2)
+
+    # --- $mod tests ---
+    def test_mod_single_operand(self):
+        """$mod with single operand returns the value."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$mod": [7]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": 7}
+
+    def test_mod_two_operands(self):
+        """$mod with two operands."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$mod": [10, 3]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": 1}
+
+    def test_mod_multiple_operands(self):
+        """$mod with multiple operands (left-to-right)."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$mod": [100, 7, 3]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": 2}  # ((100 % 7) % 3) = (2 % 3) = 2
+
+    # --- Integration tests ---
+    def test_nested_math_expressions(self):
+        """Math operators can be nested."""
+        engine = build_default_engine()
+
+        # (2 * 3) + 4 = 10
+        result = engine.apply(
+            {"/result": {"$add": [{"$mul": [2, 3]}, 4]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": 10}
+
+    def test_complex_expression(self):
+        """Complex nested expression."""
+        engine = build_default_engine()
+
+        # ((10 + 5) * 2) - 3 = 27
+        result = engine.apply(
+            {"/result": {"$sub": [{"$mul": [{"$add": [10, 5]}, 2]}, 3]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": 27}
+
+    def test_math_with_cast(self):
+        """Math operators work with $cast."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$add": [{"$cast": {"value": "10", "type": "int"}}, 5]}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": 15}
+
+    def test_math_in_condition(self):
+        """Math operators can be used in conditions."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {
+                "op": "if",
+                "cond": {"$gt": [{"$add": [10, 5]}, 12]},
+                "then": [{"/success": True}],
+                "else": [{"/success": False}],
+            },
+            source={},
+            dest={},
+        )
+
+        assert result == {"success": True}  # 15 > 12
+
+    def test_add_invalid_args_raises(self):
+        """$add raises ValueError if not given a list."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="requires a list of at least 1 value"):
+            engine.apply(
+                {"/result": {"$add": "invalid"}},
+                source={},
+                dest={},
+            )
+
+    def test_add_empty_list_raises(self):
+        """$add raises ValueError if given an empty list."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="requires a list of at least 1 value"):
+            engine.apply(
+                {"/result": {"$add": []}},
+                source={},
+                dest={},
+            )
+
 

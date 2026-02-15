@@ -464,6 +464,89 @@ result = engine.apply(spec, source={}, dest={})
 - Values are processed through `process_value` (support templates, `$ref`, `$cast`, etc.)
 - Can be nested and combined with logical operators
 
+#### Mathematical Operators
+
+J-Perm provides mathematical operators with support for 1+ operands:
+
+**`$add` — Addition**
+
+```json
+{"$add": [10]}           → 10
+{"$add": [10, 5]}        → 15
+{"$add": [1, 2, 3, 4]}   → 10  (1 + 2 + 3 + 4)
+```
+
+**`$sub` — Subtraction**
+
+```json
+{"$sub": [10]}           → 10
+{"$sub": [10, 5]}        → 5
+{"$sub": [100, 20, 10]}  → 70  ((100 - 20) - 10)
+```
+
+**`$mul` — Multiplication**
+
+```json
+{"$mul": [5]}            → 5
+{"$mul": [10, 5]}        → 50
+{"$mul": [2, 3, 4]}      → 24  ((2 * 3) * 4)
+```
+
+**`$div` — Division**
+
+```json
+{"$div": [10]}           → 10
+{"$div": [10, 5]}        → 2.0
+{"$div": [100, 2, 5]}    → 10.0  ((100 / 2) / 5)
+```
+
+**`$pow` — Exponentiation**
+
+```json
+{"$pow": [2]}            → 2
+{"$pow": [2, 3]}         → 8
+{"$pow": [2, 3, 2]}      → 64  ((2 ** 3) ** 2)
+```
+
+**`$mod` — Modulo**
+
+```json
+{"$mod": [10]}           → 10
+{"$mod": [10, 3]}        → 1
+{"$mod": [100, 7, 3]}    → 2  ((100 % 7) % 3)
+```
+
+**Nested expressions:**
+
+```python
+# Calculate: (price * quantity) + shipping
+spec = {
+    "/total": {
+        "$add": [
+            {"$mul": [{"$ref": "/price"}, {"$ref": "/quantity"}]},
+            {"$ref": "/shipping"}
+        ]
+    }
+}
+
+# Complex: ((10 + 5) * 2) - 3 = 27
+spec = {
+    "/result": {
+        "$sub": [
+            {"$mul": [{"$add": [10, 5]}, 2]},
+            3
+        ]
+    }
+}
+```
+
+**Features:**
+- Accept 1+ operands (1 operand: returns the value itself)
+- 2+ operands: apply operation left-to-right
+- Values are processed through `process_value` (support templates, `$ref`, `$cast`, etc.)
+- Can be nested to create complex expressions
+- Work seamlessly with comparison operators in conditions
+
 ---
 
 ### 4. Functions and Error Handling
@@ -1454,6 +1537,14 @@ from j_perm import (
     lte_handler,
     eq_handler,
     ne_handler,
+
+    # Mathematical operators
+    add_handler,
+    sub_handler,
+    mul_handler,
+    div_handler,
+    pow_handler,
+    mod_handler,
 
     # Function handlers
     DefMatcher,
