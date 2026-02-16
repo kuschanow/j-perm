@@ -567,8 +567,8 @@ class Pipeline:
                 max_ops = getattr(ctx.engine, 'max_operations', float('inf'))
                 if ctx.metadata['_operation_count'] > max_ops:
                     raise RuntimeError(
-                        f"Operation count ({ctx.metadata['_operation_count']}) "
-                        f"exceeded maximum ({max_ops})"
+                        f"Operation limit exceeded: {ctx.metadata['_operation_count']} operations executed, "
+                        f"maximum allowed is {max_ops}"
                     )
 
                 ctx.dest = handler.execute(step, ctx)
@@ -605,8 +605,8 @@ class Pipeline:
                 max_ops = getattr(ctx.engine, 'max_operations', float('inf'))
                 if ctx.metadata['_operation_count'] > max_ops:
                     raise RuntimeError(
-                        f"Operation count ({ctx.metadata['_operation_count']}) "
-                        f"exceeded maximum ({max_ops})"
+                        f"Operation limit exceeded: {ctx.metadata['_operation_count']} operations executed, "
+                        f"maximum allowed is {max_ops}"
                     )
 
                 # Check if handler is async

@@ -696,7 +696,7 @@ class TestOperationCounterLimits:
         engine = build_default_engine(max_operations=100)
 
         # Use exec with many set operations to hit operation count
-        with pytest.raises(RuntimeError, match="Operation count.*exceeded maximum"):
+        with pytest.raises(RuntimeError, match="Operation limit exceeded.*maximum allowed is 100"):
             engine.apply(
                 {"op": "exec", "actions": [{f"/dummy{i}": i} for i in range(150)]},
                 source={},
@@ -721,7 +721,7 @@ class TestOperationCounterLimits:
         """Custom max_operations can be set."""
         engine = build_default_engine(max_operations=5)
 
-        with pytest.raises(RuntimeError, match="exceeded maximum \\(5\\)"):
+        with pytest.raises(RuntimeError, match="Operation limit exceeded.*maximum allowed is 5"):
             engine.apply(
                 {"op": "exec", "actions": [{f"/item{i}": i} for i in range(10)]},
                 source={},
