@@ -190,7 +190,13 @@ class ForeachHandler(ActionHandler):
 
     If source is dict, converts to list of ``(key, value)`` tuples.
     If iteration fails, rollback dest to snapshot.
+
+    Args:
+        max_items: Maximum number of items to iterate (default: 100_000).
     """
+
+    def __init__(self, max_items: int = 100_000) -> None:
+        self._max_items = max_items
 
     def execute(self, step: Any, ctx: ExecutionContext) -> Any:
         arr_ptr = ctx.engine.process_value(step["in"], ctx)
@@ -209,6 +215,13 @@ class ForeachHandler(ActionHandler):
         if isinstance(arr, dict):
             arr = list(arr.items())
 
+        # Check array size
+        arr_len = len(arr) if hasattr(arr, '__len__') else sum(1 for _ in arr)
+        if arr_len > self._max_items:
+            raise ValueError(
+                f"Foreach array size ({arr_len}) exceeds maximum ({self._max_items})"
+            )
+
         var = ctx.engine.process_value(step.get("as", "item"), ctx)
         body = step["do"]
         snapshot = copy.deepcopy(ctx.dest)
@@ -216,7 +229,8 @@ class ForeachHandler(ActionHandler):
         try:
             for elem in arr:
                 extended = {"_": ctx.source, var: elem}
-                ctx.dest = ctx.engine.apply(body, source=extended, dest=ctx.dest)
+                foreach_ctx = ctx.copy(new_source=extended)
+                ctx.dest = ctx.engine.apply_to_context(body, foreach_ctx)
         except Exception:
             # Rollback on error
             ctx.dest = snapshot
@@ -245,14 +259,25 @@ class WhileHandler(ActionHandler):
     * ``do`` — actions to execute while condition is true
 
     If iteration fails, rollback dest to snapshot.
+
+    Args:
+        max_iterations: Maximum number of loop iterations (default: 10_000).
     """
+
+    def __init__(self, max_iterations: int = 10_000) -> None:
+        self._max_iterations = max_iterations
 
     def execute(self, step: Any, ctx: ExecutionContext) -> Any:
         do_while = bool(ctx.engine.process_value(step.get("do_while", False), ctx))
         snapshot = copy.deepcopy(ctx.dest)
 
         try:
+            iteration = 0
             while True:
+                if iteration >= self._max_iterations:
+                    raise RuntimeError(
+                        f"While loop exceeded maximum iterations ({self._max_iterations})"
+                    )
                 if not do_while:
                     # Evaluate condition
                     if "cond" in step:
@@ -280,11 +305,12 @@ class WhileHandler(ActionHandler):
                     if not cond_val:
                         break
 
-                # Execute body
-                ctx.dest = ctx.engine.apply(step["do"], source=ctx.source, dest=ctx.dest)
+                # Execute body, preserving metadata (functions)
+                ctx.dest = ctx.engine.apply_to_context(step["do"], ctx)
 
                 # After first iteration, always check condition
                 do_while = False
+                iteration += 1
         except Exception:
             # Rollback on error
             ctx.dest = snapshot
@@ -351,7 +377,7 @@ class IfHandler(ActionHandler):
 
         snapshot = copy.deepcopy(ctx.dest)
         try:
-            return ctx.engine.apply(actions, source=ctx.source, dest=ctx.dest)
+            return ctx.engine.apply_to_context(actions, ctx)
         except Exception:
             ctx.dest = snapshot
             raise
@@ -405,9 +431,10 @@ class ExecHandler(ActionHandler):
         merge = bool(ctx.engine.process_value(step.get("merge", False), ctx))
 
         if merge:
-            return ctx.engine.apply(actions, source=ctx.source, dest=ctx.dest)
+            return ctx.engine.apply_to_context(actions, ctx)
         else:
-            result = ctx.engine.apply(actions, source=ctx.source, dest={})
+            exec_ctx = ctx.copy(new_dest={}, deepcopy_dest=False)
+            result = ctx.engine.apply_to_context(actions, exec_ctx)
             return result
 
 
@@ -604,5 +631,124 @@ class AssertHandler(ActionHandler):
         # Handle return mode
         if should_return:
             return self._return_value(step, ctx, current)
+
+        return ctx.dest
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# try — error handling with except and finally blocks
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TryHandler(ActionHandler):
+    """``op: try`` — execute actions with error handling.
+
+    Schema::
+
+        {
+            "op": "try",
+            "do": <actions>,
+            "except": <error_handlers>,  // optional
+            "finally": <cleanup_actions>,  // optional
+        }
+
+    Behavior:
+    * Executes actions in ``do`` block
+    * If an error occurs:
+        - If ``except`` is specified, executes error handlers with error info in metadata
+        - If ``except`` is not specified, re-raises the error
+    * Always executes ``finally`` block if specified (even if error occurred)
+    * Returns the final dest
+
+    Metadata during except block:
+    * ``_error_type``: The error class name (e.g., "ValueError")
+    * ``_error_message``: The error message string
+
+    Examples::
+
+        # Basic try-except
+        {
+            "op": "try",
+            "do": [
+                {"op": "copy", "from": "/might_not_exist", "path": "/result"}
+            ],
+            "except": [
+                {"/error": "Failed to copy value"}
+            ]
+        }
+
+        # With finally cleanup
+        {
+            "op": "try",
+            "do": [
+                {"/status": "processing"},
+                {"op": "exec", "from": "/dangerous_operation"}
+            ],
+            "except": [
+                {"/status": "error"},
+                {"/error_msg": "${_:/_error_message}"}
+            ],
+            "finally": [
+                {"/processed_at": "${now}"}
+            ]
+        }
+
+        # Without except (finally always runs)
+        {
+            "op": "try",
+            "do": [
+                {"op": "copy", "from": "/data", "path": "/backup"}
+            ],
+            "finally": [
+                {"/cleanup": True}
+            ]
+        }
+    """
+
+    def execute(self, step: Any, ctx: ExecutionContext) -> Any:
+        """Execute try-except-finally logic."""
+        do_actions = step.get("do")
+        except_actions = step.get("except")
+        finally_actions = step.get("finally")
+
+        if do_actions is None:
+            raise ValueError("try operation requires 'do' parameter")
+
+        error_occurred = False
+        error_info = None
+
+        # Try to execute the main actions
+        try:
+            ctx.engine.apply_to_context(do_actions, ctx)
+        except Exception as e:
+            error_occurred = True
+            error_info = {
+                "_error_type": type(e).__name__,
+                "_error_message": str(e),
+            }
+
+            # If except block exists, execute it with error info in metadata
+            if except_actions is not None:
+                # Add error info to metadata
+                ctx.metadata.update(error_info)
+
+                try:
+                    ctx.engine.apply_to_context(except_actions, ctx)
+                finally:
+                    # Remove error info keys from metadata
+                    ctx.metadata.pop('_error_type', None)
+                    ctx.metadata.pop('_error_message', None)
+            else:
+                # No except block, re-raise the error
+                # But first execute finally if it exists
+                if finally_actions is not None:
+                    try:
+                        ctx.engine.apply_to_context(finally_actions, ctx)
+                    except Exception:
+                        pass  # Ignore errors in finally when re-raising original error
+                raise
+
+        # Always execute finally block if specified
+        if finally_actions is not None:
+            ctx.engine.apply_to_context(finally_actions, ctx)
 
         return ctx.dest

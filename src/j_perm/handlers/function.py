@@ -48,10 +48,16 @@ class DefHandler(ActionHandler):
             if len(args) != len(params):
                 raise ValueError(f"Expected {len(params)} arguments, got {len(args)} for function '{function_name}'")
             try:
-                result = ctx.engine.apply(
+                # Use current call context if available (for recursive calls)
+                call_ctx = ctx.metadata.get('_current_call_ctx', ctx)
+
+                ctx_copy = call_ctx.copy(
+                    new_source={"_": ctx.source, **{param: arg for param, arg in zip(params, args)}},
+                    deepcopy_dest=True
+                )
+                result = ctx.engine.apply_to_context(
                     body,
-                    source={"_": ctx.source, **{param: arg for param, arg in zip(params, args)}},
-                    dest=ctx.dest
+                    ctx_copy
                 )
                 if return_path:
                     temp_ctx = ctx.copy(new_source=result)
@@ -59,7 +65,12 @@ class DefHandler(ActionHandler):
                 return result
             except Exception as e:
                 if on_failure is not None:
-                    return ctx.engine.apply(on_failure, source={"_": ctx.source, **{param: arg for param, arg in zip(params, args)}}, dest=ctx.dest)
+                    call_ctx = ctx.metadata.get('_current_call_ctx', ctx)
+                    ctx_copy = call_ctx.copy(
+                        new_source={"_": ctx.source, **{param: arg for param, arg in zip(params, args)}},
+                        deepcopy_dest=True
+                    )
+                    return ctx.engine.apply_to_context(on_failure, ctx_copy)
                 else:
                     raise e
 
@@ -82,13 +93,43 @@ class CallHandler(ActionHandler):
 
     def execute(self, step: Any, ctx: ExecutionContext) -> Any:
         function_name = step["$func"]
-        args = step.get("args", [])
+        raw_args = step.get("args", [])
         functions = ctx.metadata.get("__functions__", {})
         if function_name not in functions:
             raise ValueError(f"Function '{function_name}' is not defined.")
-        function = functions[function_name]
-        result = function(*args)
-        return result
+
+        # Process arguments through value pipeline
+        args = [ctx.engine.process_value(arg, ctx) for arg in raw_args]
+
+        # Track function call depth to prevent stack overflow
+        call_stack = ctx.metadata.get('_function_call_stack', [])
+        call_stack.append(function_name)
+        ctx.metadata['_function_call_stack'] = call_stack
+
+        try:
+            # Check recursion depth
+            if len(call_stack) > ctx.engine.max_function_recursion_depth:
+                raise RecursionError(
+                    f"Function recursion depth ({len(call_stack)}) "
+                    f"exceeded maximum ({ctx.engine.max_function_recursion_depth})"
+                )
+
+            function = functions[function_name]
+            # Store current context for function to use
+            old_call_ctx = ctx.metadata.get('_current_call_ctx')
+            ctx.metadata['_current_call_ctx'] = ctx
+            try:
+                result = function(*args)
+                return result
+            finally:
+                # Restore previous context
+                if old_call_ctx is None:
+                    ctx.metadata.pop('_current_call_ctx', None)
+                else:
+                    ctx.metadata['_current_call_ctx'] = old_call_ctx
+        finally:
+            # Pop from call stack
+            call_stack.pop()
 
 
 class RaiseMatcher(ActionMatcher):

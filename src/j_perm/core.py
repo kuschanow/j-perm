@@ -27,7 +27,7 @@ from __future__ import annotations
 import copy
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Callable, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Callable, List, Optional, Tuple, Union, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .pointer_processor import PointerProcessor
@@ -57,7 +57,7 @@ class ExecutionContext:
     """Shared mutable state threaded through an entire ``apply`` call.
 
     Attributes:
-        source:   Read-only input document (normalised at Engine.apply time).
+        source:   Read-only input document (normalized at Engine.apply time).
         dest:     The document being built; mutated by each handler in sequence.
         engine:   Back-reference to the owning Engine (gives access to
                   ``process_value``, ``run_pipeline``, ``engine.resolver``,
@@ -159,6 +159,14 @@ class StageProcessor(ABC):
         """Return the (possibly transformed) step list."""
 
 
+class AsyncStageProcessor(ABC):
+    """Async version of StageProcessor for async batch transformations."""
+
+    @abstractmethod
+    async def apply(self, steps: List[Any], ctx: ExecutionContext) -> List[Any]:
+        """Return the (possibly transformed) step list asynchronously."""
+
+
 @dataclass
 class StageNode:
     """Single node in the stage tree.
@@ -175,7 +183,7 @@ class StageNode:
 
     name: str
     priority: int
-    processor: Optional[StageProcessor] = None
+    processor: Optional[Union[StageProcessor, AsyncStageProcessor]] = None
     matcher: Optional[StageMatcher] = None  # None ⇒ always fires
     children: Optional['StageRegistry'] = None
 
@@ -242,6 +250,26 @@ class StageRegistry:
         """Return nodes sorted by descending priority."""
         return sorted(self._nodes, key=lambda n: n.priority, reverse=True)
 
+    # -- async execution ----------------------------------------------------
+
+    async def run_all_async(self, steps: List[Any], ctx: ExecutionContext) -> List[Any]:
+        """Async version of run_all that supports both sync and async processors.
+
+        For AsyncStageProcessor instances, awaits them. For sync processors,
+        calls them directly. Returns the fully transformed step list.
+        """
+        for node in sorted(self._nodes, key=lambda n: n.priority, reverse=True):
+            if node.matcher is None or node.matcher.matches(steps, ctx):
+                if node.children is not None:
+                    steps = await node.children.run_all_async(steps, ctx)
+                if node.processor is not None:
+                    # Check if processor is async
+                    if isinstance(node.processor, AsyncStageProcessor):
+                        steps = await node.processor.apply(steps, ctx)
+                    else:
+                        steps = node.processor.apply(steps, ctx)
+        return steps
+
 
 # Backward-compat alias: ``Stage`` was the original name for ``StageProcessor``.
 Stage = StageProcessor
@@ -271,6 +299,23 @@ class Middleware(ABC):
     @abstractmethod
     def process(self, step: Any, ctx: ExecutionContext) -> Any:
         """Transform (or validate) a single step before dispatch."""
+
+
+class AsyncMiddleware(ABC):
+    """Async version of Middleware for async per-step processing.
+
+    Class attributes (set in subclass)::
+
+        name:     str   – unique key
+        priority: int   – higher = earlier; baseline = 0
+    """
+
+    name: str
+    priority: int
+
+    @abstractmethod
+    async def process(self, step: Any, ctx: ExecutionContext) -> Any:
+        """Transform (or validate) a single step before dispatch asynchronously."""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -303,6 +348,18 @@ class ActionHandler(ABC):
         """Run the action.  Return the new ``dest``."""
 
 
+class AsyncActionHandler(ABC):
+    """Async version of ActionHandler for operations that benefit from async execution.
+
+    The handler is responsible for calling ``await ctx.engine.process_value_async(…)``
+    whenever it needs a substituted value.
+    """
+
+    @abstractmethod
+    async def execute(self, step: Any, ctx: ExecutionContext) -> Any:
+        """Run the action asynchronously.  Return the new ``dest``."""
+
+
 @dataclass
 class ActionNode:
     """Node in the action-type tree.
@@ -327,7 +384,7 @@ class ActionNode:
     name: str
     priority: int
     matcher: ActionMatcher
-    handler: Optional[ActionHandler] = None
+    handler: Optional[Union[ActionHandler, AsyncActionHandler]] = None
     children: Optional['ActionTypeRegistry'] = None
     exclusive: bool = True
 
@@ -505,7 +562,58 @@ class Pipeline:
             if not handlers:
                 raise ValueError(f"unhandled step: {step!r}")
             for handler in handlers:
+                # Increment operation counter
+                ctx.metadata['_operation_count'] = ctx.metadata.get('_operation_count', 0) + 1
+                max_ops = getattr(ctx.engine, 'max_operations', float('inf'))
+                if ctx.metadata['_operation_count'] > max_ops:
+                    raise RuntimeError(
+                        f"Operation limit exceeded: {ctx.metadata['_operation_count']} operations executed, "
+                        f"maximum allowed is {max_ops}"
+                    )
+
                 ctx.dest = handler.execute(step, ctx)
+
+    # -- async execution ----------------------------------------------------
+
+    async def run_async(self, spec: Any, ctx: ExecutionContext) -> None:
+        """Run the pipeline asynchronously.
+
+        Supports async stages, middlewares, and handlers. Sync components
+        are called directly, async components are awaited.
+
+        *spec* is either a single step or a list of steps.
+        After ``run_async`` returns, the result lives in ``ctx.dest``.
+        """
+        steps: List[Any] = spec if isinstance(spec, list) else [spec]
+        # Use async version of stages if any are async
+        steps = await self.stages.run_all_async(steps, ctx)
+
+        for step in steps:
+            # Process middlewares (check if async)
+            for mw in sorted(self._middlewares, key=lambda m: m.priority, reverse=True):
+                if isinstance(mw, AsyncMiddleware):
+                    step = await mw.process(step, ctx)
+                else:
+                    step = mw.process(step, ctx)
+
+            handlers = self.registry.resolve(step)
+            if not handlers:
+                raise ValueError(f"unhandled step: {step!r}")
+            for handler in handlers:
+                # Increment operation counter
+                ctx.metadata['_operation_count'] = ctx.metadata.get('_operation_count', 0) + 1
+                max_ops = getattr(ctx.engine, 'max_operations', float('inf'))
+                if ctx.metadata['_operation_count'] > max_ops:
+                    raise RuntimeError(
+                        f"Operation limit exceeded: {ctx.metadata['_operation_count']} operations executed, "
+                        f"maximum allowed is {max_ops}"
+                    )
+
+                # Check if handler is async
+                if isinstance(handler, AsyncActionHandler):
+                    ctx.dest = await handler.execute(step, ctx)
+                else:
+                    ctx.dest = handler.execute(step, ctx)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -551,7 +659,7 @@ class Engine:
 
     Algorithms (see individual method docs for details):
 
-    * ``apply``          – normalise source, deepcopy dest, run main_pipeline,
+    * ``apply``          – normalize source, deepcopy dest, run main_pipeline,
                            return deepcopy of result.
     * ``process_value``  – loop ``value_pipeline.run([val])`` until output ==
                            input or ``value_max_depth`` exceeded.
@@ -570,12 +678,16 @@ class Engine:
             pipelines: Optional[dict[str, Pipeline]] = None,
             unescape_rules: Optional[List[UnescapeRule]] = None,
             custom_functions: Optional[dict[str, Callable]] = None,
+            max_operations: int = 1_000_000,
+            max_function_recursion_depth: int = 100,
     ) -> None:
         self.resolver = resolver
         self.processor = processor
         self.main_pipeline = main_pipeline
         self.value_pipeline = value_pipeline
         self.value_max_depth = value_max_depth
+        self.max_operations = max_operations
+        self.max_function_recursion_depth = max_function_recursion_depth
         self._pipelines = dict(pipelines) if pipelines else {}
         self._unescape_rules = sorted(unescape_rules or [], key=lambda r: r.priority, reverse=True)
         for name, func in (custom_functions or {}).items():
@@ -608,6 +720,20 @@ class Engine:
         self.main_pipeline.run(spec, ctx)
         return copy.deepcopy(ctx.dest)
 
+    async def apply_async(self, spec: Any, *, source: Any, dest: Any) -> Any:
+        """Async version of apply().
+
+        Execute a DSL script through *main_pipeline* asynchronously.
+        Supports async handlers, stages, and middlewares.
+        """
+        ctx = ExecutionContext(
+            source=_tuples_to_lists(source),
+            dest=copy.deepcopy(dest),
+            engine=self,
+        )
+        await self.main_pipeline.run_async(spec, ctx)
+        return copy.deepcopy(ctx.dest)
+
     def apply_to_context(self, spec: Any, ctx: ExecutionContext) -> Any:
         """Like ``apply``, but takes a pre-constructed context and mutates it in-place.
 
@@ -615,6 +741,11 @@ class Engine:
         the dest if necessary.  Returns None; the result lives in ``ctx.dest``.
         """
         self.main_pipeline.run(spec, ctx)
+        return copy.deepcopy(ctx.dest)
+
+    async def apply_to_context_async(self, spec: Any, ctx: ExecutionContext) -> Any:
+        """Async version of apply_to_context()."""
+        await self.main_pipeline.run_async(spec, ctx)
         return copy.deepcopy(ctx.dest)
 
     def run_pipeline(self, name: str, spec: Any, ctx: ExecutionContext) -> Any:
@@ -638,6 +769,23 @@ class Engine:
         self._pipelines[name].run(spec, sub_ctx)
         return copy.deepcopy(sub_ctx.dest)
 
+    async def run_pipeline_async(self, name: str, spec: Any, ctx: ExecutionContext) -> Any:
+        """Async version of run_pipeline().
+
+        Typical call site (inside an async handler)::
+
+            result = await ctx.engine.run_pipeline_async("name", spec, ctx)
+        """
+        if name not in self._pipelines:
+            raise KeyError(f"Pipeline {name!r} not registered")
+        sub_ctx = ExecutionContext(
+            source=ctx.source,
+            dest=copy.deepcopy(ctx.dest),
+            engine=self,
+        )
+        await self._pipelines[name].run_async(spec, sub_ctx)
+        return copy.deepcopy(sub_ctx.dest)
+
     def process_value(self, value: Any, ctx: ExecutionContext, *, _unescape: bool = True) -> Any:
         """Run *value_pipeline* over *value* until it stabilises.
 
@@ -659,7 +807,8 @@ class Engine:
         current = value
         for _ in range(self.value_max_depth):
             # Save real dest in metadata for JMESPath access
-            metadata_with_dest = {**ctx.metadata, '_real_dest': ctx.dest}
+            # Preserve existing _real_dest if we're in a nested process_value call
+            metadata_with_dest = {**ctx.metadata, '_real_dest': ctx.metadata.get('_real_dest', ctx.dest)}
             value_ctx = ExecutionContext(
                 source=ctx.source,
                 dest=current,
@@ -667,6 +816,38 @@ class Engine:
                 metadata=metadata_with_dest,
             )
             self.value_pipeline.run([current], value_ctx)
+            if value_ctx.dest == current:
+                break
+            current = value_ctx.dest
+        else:
+            raise RecursionError("value_max_depth exceeded")
+
+        if _unescape:
+            for rule in self._unescape_rules:
+                current = rule.unescape(current)
+        return current
+
+    async def process_value_async(self, value: Any, ctx: ExecutionContext, *, _unescape: bool = True) -> Any:
+        """Async version of process_value().
+
+        Run *value_pipeline* over *value* asynchronously until it stabilises.
+        Supports async handlers in the value pipeline.
+        """
+        if self.value_pipeline is None:
+            return value
+
+        current = value
+        for _ in range(self.value_max_depth):
+            # Save real dest in metadata for JMESPath access
+            # Preserve existing _real_dest if we're in a nested process_value call
+            metadata_with_dest = {**ctx.metadata, '_real_dest': ctx.metadata.get('_real_dest', ctx.dest)}
+            value_ctx = ExecutionContext(
+                source=ctx.source,
+                dest=current,
+                engine=self,
+                metadata=metadata_with_dest,
+            )
+            await self.value_pipeline.run_async([current], value_ctx)
             if value_ctx.dest == current:
                 break
             current = value_ctx.dest
