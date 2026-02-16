@@ -248,7 +248,7 @@ spec = {"/words": {"$str_split": {"string": "${/large_text}", "delimiter": " "}}
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `regex_timeout` | 2.0 | Timeout in seconds for regex operations |
-| `regex_allowed_flags` | None | Bitmask of allowed regex flags (None = all allowed) |
+| `regex_allowed_flags` | None | Bitmask of allowed regex flags (None = default safe flags: IGNORECASE, MULTILINE, DOTALL, VERBOSE, ASCII; -1 = all flags allowed) |
 
 **Example: Preventing ReDoS attacks**
 
@@ -286,6 +286,9 @@ spec = {
         }
     }
 }
+
+# Allow all flags (not recommended for untrusted input)
+engine = build_default_engine(regex_allowed_flags=-1)
 ```
 
 ### Customizing Limits

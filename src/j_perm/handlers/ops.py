@@ -685,7 +685,7 @@ class TryHandler(ActionHandler):
             ],
             "except": [
                 {"/status": "error"},
-                {"/error_msg": "${_:/error_message}"}
+                {"/error_msg": "${_:/_error_message}"}
             ],
             "finally": [
                 {"/processed_at": "${now}"}
@@ -728,15 +728,15 @@ class TryHandler(ActionHandler):
 
             # If except block exists, execute it with error info in metadata
             if except_actions is not None:
-                # Save current metadata and add error info
-                old_metadata = ctx.metadata.copy()
+                # Add error info to metadata
                 ctx.metadata.update(error_info)
 
                 try:
                     ctx.engine.apply_to_context(except_actions, ctx)
                 finally:
-                    # Restore original metadata
-                    ctx.metadata = old_metadata
+                    # Remove error info keys from metadata
+                    ctx.metadata.pop('_error_type', None)
+                    ctx.metadata.pop('_error_message', None)
             else:
                 # No except block, re-raise the error
                 # But first execute finally if it exists

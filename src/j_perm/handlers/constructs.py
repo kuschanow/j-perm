@@ -88,14 +88,15 @@ def eval_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
     # Execute the nested actions with fresh dest, preserving metadata
     eval_ctx = ctx.copy(new_dest={}, deepcopy_dest=False)
 
-    # Temporarily remove current call context for isolation
-    old_call_ctx = eval_ctx.metadata.pop('_real_dest', None)
+    # Temporarily remove _real_dest to prevent @: references from accessing parent dest
+    # This ensures eval is properly isolated
+    old_real_dest = eval_ctx.metadata.pop('_real_dest', None)
     try:
         result = ctx.engine.apply_to_context(node["$eval"], eval_ctx)
     finally:
-        # Restore call context
-        if old_call_ctx is not None:
-            eval_ctx.metadata['_real_dest'] = old_call_ctx
+        # Restore _real_dest for parent context
+        if old_real_dest is not None:
+            eval_ctx.metadata['_real_dest'] = old_real_dest
 
     if "$select" in node:
         sel_ptr = ctx.engine.process_value(node["$select"], ctx, _unescape=False)
@@ -1132,7 +1133,9 @@ def make_regex_match_handler(
 
     Args:
         timeout: Timeout in seconds for regex operations.
-        allowed_flags: Bitmask of allowed flags. None means all flags allowed.
+        allowed_flags: Bitmask of allowed flags. None means default safe flags
+                      (IGNORECASE, MULTILINE, DOTALL, VERBOSE, ASCII).
+                      Use -1 to allow all flags (not recommended for untrusted input).
 
     Returns:
         Handler function for ``$regex_match`` construct.
@@ -1140,6 +1143,9 @@ def make_regex_match_handler(
     # Default allowed flags: IGNORECASE, MULTILINE, DOTALL, VERBOSE, ASCII
     if allowed_flags is None:
         allowed_flags = re.IGNORECASE | re.MULTILINE | re.DOTALL | re.VERBOSE | re.ASCII
+    elif allowed_flags == -1:
+        # Special value to allow all flags (not recommended for untrusted input)
+        allowed_flags = 0xFFFFFFFF  # Allow all possible flags
 
     def regex_match_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
         """``$regex_match`` construct: check if string matches regex pattern.
@@ -1192,9 +1198,17 @@ def make_regex_search_handler(
     timeout: float = 2.0,
     allowed_flags: int | None = None,
 ) -> Callable[[Mapping[str, Any], ExecutionContext], Any]:
-    """Factory for ``$regex_search`` handler with security limits."""
+    """Factory for ``$regex_search`` handler with security limits.
+
+    Args:
+        timeout: Timeout in seconds for regex operations.
+        allowed_flags: Bitmask of allowed flags. None means default safe flags.
+                      Use -1 to allow all flags (not recommended for untrusted input).
+    """
     if allowed_flags is None:
         allowed_flags = re.IGNORECASE | re.MULTILINE | re.DOTALL | re.VERBOSE | re.ASCII
+    elif allowed_flags == -1:
+        allowed_flags = 0xFFFFFFFF
 
     def regex_search_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
         """``$regex_search`` construct: search for first occurrence of pattern.
@@ -1244,9 +1258,17 @@ def make_regex_findall_handler(
     timeout: float = 2.0,
     allowed_flags: int | None = None,
 ) -> Callable[[Mapping[str, Any], ExecutionContext], Any]:
-    """Factory for ``$regex_findall`` handler with security limits."""
+    """Factory for ``$regex_findall`` handler with security limits.
+
+    Args:
+        timeout: Timeout in seconds for regex operations.
+        allowed_flags: Bitmask of allowed flags. None means default safe flags.
+                      Use -1 to allow all flags (not recommended for untrusted input).
+    """
     if allowed_flags is None:
         allowed_flags = re.IGNORECASE | re.MULTILINE | re.DOTALL | re.VERBOSE | re.ASCII
+    elif allowed_flags == -1:
+        allowed_flags = 0xFFFFFFFF
 
     def regex_findall_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
         """``$regex_findall`` construct: find all occurrences of pattern.
@@ -1295,9 +1317,17 @@ def make_regex_replace_handler(
     timeout: float = 2.0,
     allowed_flags: int | None = None,
 ) -> Callable[[Mapping[str, Any], ExecutionContext], Any]:
-    """Factory for ``$regex_replace`` handler with security limits."""
+    """Factory for ``$regex_replace`` handler with security limits.
+
+    Args:
+        timeout: Timeout in seconds for regex operations.
+        allowed_flags: Bitmask of allowed flags. None means default safe flags.
+                      Use -1 to allow all flags (not recommended for untrusted input).
+    """
     if allowed_flags is None:
         allowed_flags = re.IGNORECASE | re.MULTILINE | re.DOTALL | re.VERBOSE | re.ASCII
+    elif allowed_flags == -1:
+        allowed_flags = 0xFFFFFFFF
 
     def regex_replace_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
         """``$regex_replace`` construct: replace pattern matches in string.
@@ -1351,9 +1381,17 @@ def make_regex_groups_handler(
     timeout: float = 2.0,
     allowed_flags: int | None = None,
 ) -> Callable[[Mapping[str, Any], ExecutionContext], Any]:
-    """Factory for ``$regex_groups`` handler with security limits."""
+    """Factory for ``$regex_groups`` handler with security limits.
+
+    Args:
+        timeout: Timeout in seconds for regex operations.
+        allowed_flags: Bitmask of allowed flags. None means default safe flags.
+                      Use -1 to allow all flags (not recommended for untrusted input).
+    """
     if allowed_flags is None:
         allowed_flags = re.IGNORECASE | re.MULTILINE | re.DOTALL | re.VERBOSE | re.ASCII
+    elif allowed_flags == -1:
+        allowed_flags = 0xFFFFFFFF
 
     def regex_groups_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
         """``$regex_groups`` construct: extract capture groups from pattern match.

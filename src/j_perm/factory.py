@@ -126,7 +126,9 @@ def build_default_engine(
         jmes_options:            Custom JMESPath options for template handler.  ``None`` → uses built-in with subtract function.
         value_max_depth:         Stabilisation-loop iteration cap.
         regex_timeout:           Timeout in seconds for regex operations (default: 2.0).
-        regex_allowed_flags:     Bitmask of allowed regex flags. ``None`` → all flags allowed (default).
+        regex_allowed_flags:     Bitmask of allowed regex flags. ``None`` → default safe flags
+                                 (IGNORECASE, MULTILINE, DOTALL, VERBOSE, ASCII).
+                                 Use -1 to allow all flags (not recommended for untrusted input).
         pow_max_base:            Maximum base value for ``$pow`` (default: 1e6).
         pow_max_exponent:        Maximum exponent value for ``$pow`` (default: 1000).
         mul_max_string_result:   Maximum length of string result in ``$mul`` (default: 1_000_000).

@@ -171,6 +171,12 @@ def get_all_handlers_with_limits(
     pow_max_exponent=1000,
     mul_max_string_result=1_000_000,
     mul_max_operand=1e9,
+    add_max_number_result=1e15,
+    add_max_string_result=100_000_000,
+    sub_max_number_result=1e15,
+    str_max_split_results=100_000,
+    str_max_join_result=10_000_000,
+    str_max_replace_result=10_000_000,
 ):
     """Get all handlers with custom security limits.
 
@@ -182,6 +188,12 @@ def get_all_handlers_with_limits(
         pow_max_exponent: Maximum exponent value for $pow.
         mul_max_string_result: Maximum length of string result in $mul.
         mul_max_operand: Maximum numeric operand value in $mul.
+        add_max_number_result: Maximum numeric result from $add.
+        add_max_string_result: Maximum string length result from $add.
+        sub_max_number_result: Maximum numeric result from $sub.
+        str_max_split_results: Maximum number of results from $str_split.
+        str_max_join_result: Maximum length of result from $str_join.
+        str_max_replace_result: Maximum length of result from $str_replace.
 
     Returns:
         Dict of all handler constructs with specified limits.
@@ -193,13 +205,19 @@ def get_all_handlers_with_limits(
         handlers = get_all_handlers_with_limits(
             regex_timeout=5.0,
             pow_max_exponent=500,
+            add_max_string_result=1_000_000,
         )
         engine = build_default_engine(specials=handlers)
     """
     from .handlers.constructs import (
         make_cast_handler,
+        make_add_handler,
+        make_sub_handler,
         make_mul_handler,
         make_pow_handler,
+        make_str_split_handler,
+        make_str_join_handler,
+        make_str_replace_handler,
         make_regex_match_handler,
         make_regex_search_handler,
         make_regex_findall_handler,
@@ -215,8 +233,13 @@ def get_all_handlers_with_limits(
         **LOGICAL_HANDLERS,
         **COMPARISON_HANDLERS,
         # Math handlers with limits
-        "$add": add_handler,
-        "$sub": sub_handler,
+        "$add": make_add_handler(
+            max_number_result=add_max_number_result,
+            max_string_result=add_max_string_result,
+        ),
+        "$sub": make_sub_handler(
+            max_number_result=sub_max_number_result,
+        ),
         "$mul": make_mul_handler(
             max_string_result=mul_max_string_result,
             max_operand=mul_max_operand,
@@ -227,7 +250,25 @@ def get_all_handlers_with_limits(
             max_exponent=pow_max_exponent,
         ),
         "$mod": mod_handler,
-        **STRING_HANDLERS,
+        # String handlers with limits
+        "$str_split": make_str_split_handler(
+            max_results=str_max_split_results,
+        ),
+        "$str_join": make_str_join_handler(
+            max_result_length=str_max_join_result,
+        ),
+        "$str_slice": str_slice_handler,
+        "$str_upper": str_upper_handler,
+        "$str_lower": str_lower_handler,
+        "$str_strip": str_strip_handler,
+        "$str_lstrip": str_lstrip_handler,
+        "$str_rstrip": str_rstrip_handler,
+        "$str_replace": make_str_replace_handler(
+            max_result_length=str_max_replace_result,
+        ),
+        "$str_contains": str_contains_handler,
+        "$str_startswith": str_startswith_handler,
+        "$str_endswith": str_endswith_handler,
         # Regex handlers with limits
         "$regex_match": make_regex_match_handler(
             timeout=regex_timeout,
