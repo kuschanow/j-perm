@@ -260,7 +260,7 @@ class TemplSubstHandler(ActionHandler):
         try:
             return ctx.engine.processor.get(pointer, ctx)
         except Exception:
-            return expr
+            return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────

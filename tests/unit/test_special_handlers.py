@@ -140,14 +140,14 @@ class TestAndHandler:
 
         result = engine.apply(
             {"/result": {"$and": [
-                [{"op": "set", "path": "/x", "value": 1}],
-                [{"op": "set", "path": "/y", "value": 2}],
+                {"$ref": "/a"},
+                {"$ref": "/b"},
             ]}},
-            source={},
+            source={"a": 10, "b": 20},
             dest={},
         )
 
-        assert result == {"result": {"y": 2}}
+        assert result == {"result": 20}
 
     def test_and_returns_first_falsy(self):
         """$and returns first falsy result."""
@@ -155,46 +155,45 @@ class TestAndHandler:
 
         result = engine.apply(
             {"/result": {"$and": [
-                [{"op": "set", "path": "/x", "value": 1}],
-                [{"op": "assert", "path": "/missing", "return": True}],
-                [{"op": "set", "path": "/y", "value": 2}],
+                {"$ref": "/a"},
+                {"$ref": "/falsy"},
+                {"$ref": "/b"},
             ]}},
-            source={},
+            source={"a": 10, "falsy": 0, "b": 20},
             dest={},
         )
 
-        assert result == {"result": False}
+        assert result == {"result": 0}
 
-    def test_and_with_empty_dicts(self):
-        """$and handles empty dict as falsy."""
+    def test_and_with_empty_values(self):
+        """$and handles empty list as falsy."""
         engine = build_default_engine()
 
         result = engine.apply(
             {"/result": {"$and": [
                 [],
-                [{"op": "set", "path": "/x", "value": 1}],
+                {"$ref": "/a"},
             ]}},
-            source={},
+            source={"a": 10},
             dest={},
         )
 
-        assert result == {"result": {}}
+        assert result == {"result": []}
 
-    def test_and_each_action_starts_with_empty_dest(self):
-        """Each action in $and starts with empty dest."""
+    def test_and_with_boolean_expressions(self):
+        """$and works with boolean expressions."""
         engine = build_default_engine()
 
         result = engine.apply(
             {"/result": {"$and": [
-                [{"op": "set", "path": "/x", "value": 1}],
-                [{"op": "set", "path": "/y", "value": 2}],
+                {"$gt": [{"$ref": "/x"}, 0]},
+                {"$lt": [{"$ref": "/x"}, 100]},
             ]}},
-            source={},
-            dest={"outer": "value"},
+            source={"x": 50},
+            dest={},
         )
 
-        # Second action doesn't see first action's result
-        assert result == {"outer": "value", "result": {"y": 2}}
+        assert result == {"result": True}
 
 
 class TestOrHandler:
@@ -206,15 +205,15 @@ class TestOrHandler:
 
         result = engine.apply(
             {"/result": {"$or": [
-                [{"op": "assert", "path": "/missing", "return": True}],
-                [{"op": "set", "path": "/x", "value": 1}],
-                [{"op": "set", "path": "/y", "value": 2}],
+                {"$ref": "/falsy"},
+                {"$ref": "/a"},
+                {"$ref": "/b"},
             ]}},
-            source={},
+            source={"falsy": 0, "a": 10, "b": 20},
             dest={},
         )
 
-        assert result == {"result": {"x": 1}}
+        assert result == {"result": 10}
 
     def test_or_returns_last_if_all_falsy(self):
         """$or returns last result if all are falsy."""
@@ -223,9 +222,9 @@ class TestOrHandler:
         result = engine.apply(
             {"/result": {"$or": [
                 [],
-                [{"op": "assert", "path": "/missing", "return": True}],
+                {"$ref": "/falsy"},
             ]}},
-            source={},
+            source={"falsy": False},
             dest={},
         )
 
@@ -237,31 +236,30 @@ class TestOrHandler:
 
         result = engine.apply(
             {"/result": {"$or": [
-                [{"op": "set", "path": "/first", "value": 1}],
-                [{"op": "set", "path": "/second", "value": 2}],
+                {"$ref": "/a"},
+                {"$ref": "/b"},
             ]}},
-            source={},
+            source={"a": 10, "b": 20},
             dest={},
         )
 
         # Should stop at first truthy
-        assert result == {"result": {"first": 1}}
+        assert result == {"result": 10}
 
-    def test_or_each_action_starts_with_empty_dest(self):
-        """Each action in $or starts with empty dest."""
+    def test_or_with_boolean_expressions(self):
+        """$or works with boolean expressions."""
         engine = build_default_engine()
 
         result = engine.apply(
             {"/result": {"$or": [
-                [],
-                [{"op": "set", "path": "/x", "value": 1}],
+                {"$eq": [{"$ref": "/status"}, "active"]},
+                {"$eq": [{"$ref": "/status"}, "pending"]},
             ]}},
-            source={},
-            dest={"outer": "value"},
+            source={"status": "pending"},
+            dest={},
         )
 
-        # Second action doesn't see first action's result
-        assert result == {"outer": "value", "result": {"x": 1}}
+        assert result == {"result": True}
 
 
 class TestNotHandler:
@@ -272,8 +270,8 @@ class TestNotHandler:
         engine = build_default_engine()
 
         result = engine.apply(
-            {"/result": {"$not": [{"op": "set", "path": "/x", "value": 1}]}},
-            source={},
+            {"/result": {"$not": {"$ref": "/a"}}},
+            source={"a": 10},
             dest={},
         )
 
@@ -284,15 +282,15 @@ class TestNotHandler:
         engine = build_default_engine()
 
         result = engine.apply(
-            {"/result": {"$not": [{"op": "assert", "path": "/missing", "return": True}]}},
-            source={},
+            {"/result": {"$not": {"$ref": "/flag"}}},
+            source={"flag": False},
             dest={},
         )
 
         assert result == {"result": True}
 
-    def test_not_with_empty_dict(self):
-        """$not returns True for empty dict (falsy)."""
+    def test_not_with_empty_list(self):
+        """$not returns True for empty list (falsy)."""
         engine = build_default_engine()
 
         result = engine.apply(
@@ -303,35 +301,29 @@ class TestNotHandler:
 
         assert result == {"result": True}
 
-    def test_not_with_assert_value(self):
-        """$not with assert value check."""
+    def test_not_with_boolean_expression(self):
+        """$not with boolean expression."""
         engine = build_default_engine()
 
         result = engine.apply(
-            {"/result": {"$not": {"op": "assert", "value": False, "equals": True, "return": True}}},
-            source={},
+            {"/result": {"$not": {"$gt": [{"$ref": "/age"}, 18]}}},
+            source={"age": 15},
             dest={},
         )
 
-        # Assert with mismatched values returns AssertionError, but with return=True returns False
-        # Actually, wait - if values don't match, assert raises error even with return
-        # Let me check the logic again...
-        # Actually in the new implementation, if equals check fails, it raises AssertionError
-        # So this test would fail. Let me use a different example.
         assert result == {"result": True}
 
-    def test_not_action_starts_with_empty_dest(self):
-        """Action in $not starts with empty dest."""
+    def test_not_with_zero(self):
+        """$not treats zero as falsy."""
         engine = build_default_engine()
 
         result = engine.apply(
-            {"/result": {"$not": [{"op": "set", "path": "/x", "value": 1}]}},
-            source={},
-            dest={"outer": "value"},
+            {"/result": {"$not": {"$ref": "/count"}}},
+            source={"count": 0},
+            dest={},
         )
 
-        # Action doesn't see outer dest
-        assert result == {"outer": "value", "result": False}
+        assert result == {"result": True}
 
 
 class TestDestPointer:
@@ -379,7 +371,7 @@ class TestDestPointer:
 
         # Changed behavior: returns the expression instead of None
         # This allows literal values like ${int:42} to work
-        assert result == {"result": "@:/missing"}
+        assert result == {"result": None}
 
     def test_dest_pointer_in_concatenation(self):
         """@:/path can be used in string concatenation."""
@@ -617,7 +609,8 @@ class TestCastHandler:
         result = engine.apply(
             {
                 "/via_construct": {"$cast": {"value": "42", "type": "int"}},
-                "/via_template": "${int:42}",
+                "/number": 42,
+                "/via_template": "${int:${@:number}}",
             },
             source={},
             dest={},

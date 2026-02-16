@@ -161,3 +161,93 @@ def get_all_handlers(casters=None):
         **ALL_HANDLERS_NO_CAST,
         "$cast": make_cast_handler(resolved_casters),
     }
+
+
+def get_all_handlers_with_limits(
+    casters=None,
+    regex_timeout=2.0,
+    regex_allowed_flags=None,
+    pow_max_base=1e6,
+    pow_max_exponent=1000,
+    mul_max_string_result=1_000_000,
+    mul_max_operand=1e9,
+):
+    """Get all handlers with custom security limits.
+
+    Args:
+        casters: Optional dict of casters for $cast handler.
+        regex_timeout: Timeout for regex operations in seconds.
+        regex_allowed_flags: Bitmask of allowed regex flags. None means all allowed.
+        pow_max_base: Maximum base value for $pow.
+        pow_max_exponent: Maximum exponent value for $pow.
+        mul_max_string_result: Maximum length of string result in $mul.
+        mul_max_operand: Maximum numeric operand value in $mul.
+
+    Returns:
+        Dict of all handler constructs with specified limits.
+
+    Example::
+
+        from j_perm.construct_groups import get_all_handlers_with_limits
+
+        handlers = get_all_handlers_with_limits(
+            regex_timeout=5.0,
+            pow_max_exponent=500,
+        )
+        engine = build_default_engine(specials=handlers)
+    """
+    from .handlers.constructs import (
+        make_cast_handler,
+        make_mul_handler,
+        make_pow_handler,
+        make_regex_match_handler,
+        make_regex_search_handler,
+        make_regex_findall_handler,
+        make_regex_replace_handler,
+        make_regex_groups_handler,
+    )
+    from .casters import BUILTIN_CASTERS
+
+    resolved_casters = casters if casters is not None else BUILTIN_CASTERS
+
+    return {
+        **CORE_HANDLERS,
+        **LOGICAL_HANDLERS,
+        **COMPARISON_HANDLERS,
+        # Math handlers with limits
+        "$add": add_handler,
+        "$sub": sub_handler,
+        "$mul": make_mul_handler(
+            max_string_result=mul_max_string_result,
+            max_operand=mul_max_operand,
+        ),
+        "$div": div_handler,
+        "$pow": make_pow_handler(
+            max_base=pow_max_base,
+            max_exponent=pow_max_exponent,
+        ),
+        "$mod": mod_handler,
+        **STRING_HANDLERS,
+        # Regex handlers with limits
+        "$regex_match": make_regex_match_handler(
+            timeout=regex_timeout,
+            allowed_flags=regex_allowed_flags,
+        ),
+        "$regex_search": make_regex_search_handler(
+            timeout=regex_timeout,
+            allowed_flags=regex_allowed_flags,
+        ),
+        "$regex_findall": make_regex_findall_handler(
+            timeout=regex_timeout,
+            allowed_flags=regex_allowed_flags,
+        ),
+        "$regex_replace": make_regex_replace_handler(
+            timeout=regex_timeout,
+            allowed_flags=regex_allowed_flags,
+        ),
+        "$regex_groups": make_regex_groups_handler(
+            timeout=regex_timeout,
+            allowed_flags=regex_allowed_flags,
+        ),
+        "$cast": make_cast_handler(resolved_casters),
+    }

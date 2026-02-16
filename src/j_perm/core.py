@@ -384,7 +384,7 @@ class ActionNode:
     name: str
     priority: int
     matcher: ActionMatcher
-    handler: Optional[ActionHandler] = None
+    handler: Optional[Union[ActionHandler, AsyncActionHandler]] = None
     children: Optional['ActionTypeRegistry'] = None
     exclusive: bool = True
 
@@ -562,6 +562,15 @@ class Pipeline:
             if not handlers:
                 raise ValueError(f"unhandled step: {step!r}")
             for handler in handlers:
+                # Increment operation counter
+                ctx.metadata['_operation_count'] = ctx.metadata.get('_operation_count', 0) + 1
+                max_ops = getattr(ctx.engine, 'max_operations', float('inf'))
+                if ctx.metadata['_operation_count'] > max_ops:
+                    raise RuntimeError(
+                        f"Operation count ({ctx.metadata['_operation_count']}) "
+                        f"exceeded maximum ({max_ops})"
+                    )
+
                 ctx.dest = handler.execute(step, ctx)
 
     # -- async execution ----------------------------------------------------
@@ -591,6 +600,15 @@ class Pipeline:
             if not handlers:
                 raise ValueError(f"unhandled step: {step!r}")
             for handler in handlers:
+                # Increment operation counter
+                ctx.metadata['_operation_count'] = ctx.metadata.get('_operation_count', 0) + 1
+                max_ops = getattr(ctx.engine, 'max_operations', float('inf'))
+                if ctx.metadata['_operation_count'] > max_ops:
+                    raise RuntimeError(
+                        f"Operation count ({ctx.metadata['_operation_count']}) "
+                        f"exceeded maximum ({max_ops})"
+                    )
+
                 # Check if handler is async
                 if isinstance(handler, AsyncActionHandler):
                     ctx.dest = await handler.execute(step, ctx)
@@ -660,12 +678,16 @@ class Engine:
             pipelines: Optional[dict[str, Pipeline]] = None,
             unescape_rules: Optional[List[UnescapeRule]] = None,
             custom_functions: Optional[dict[str, Callable]] = None,
+            max_operations: int = 1_000_000,
+            max_function_recursion_depth: int = 100,
     ) -> None:
         self.resolver = resolver
         self.processor = processor
         self.main_pipeline = main_pipeline
         self.value_pipeline = value_pipeline
         self.value_max_depth = value_max_depth
+        self.max_operations = max_operations
+        self.max_function_recursion_depth = max_function_recursion_depth
         self._pipelines = dict(pipelines) if pipelines else {}
         self._unescape_rules = sorted(unescape_rules or [], key=lambda r: r.priority, reverse=True)
         for name, func in (custom_functions or {}).items():

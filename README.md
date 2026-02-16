@@ -3,7 +3,7 @@
 A composable JSON transformation DSL with a powerful, extensible architecture.
 
 J-Perm lets you describe data transformations as **executable specifications** — a list of steps that can be applied to input documents. It supports
-JSON Pointer addressing with slicing (arrays and strings), template interpolation with `${...}` syntax, special constructs (`$ref`, `$eval`, `$cast`), logical and comparison operators, mathematical operations, comprehensive string manipulation (11 operations), regular expressions (5 operations), and a rich set of built-in operations.
+JSON Pointer addressing with slicing (arrays and strings), template interpolation with `${...}` syntax, special constructs (`$ref`, `$eval`, `$cast`), logical and comparison operators (`$and`, `$or`, `$not`), comparison operators (6 operators), mathematical operations (6 operators), membership testing (`$in`), comprehensive string manipulation (11 operations), regular expressions (5 operations), user-defined functions (`$def`, `$func`, `$raise`), error handling (`try-except-finally`), and a rich set of built-in operations — all with configurable security limits to prevent DoS attacks.
 
 ---
 
@@ -114,14 +114,24 @@ J-Perm is built on a **pipeline architecture** with two main levels:
 ```python
 from j_perm import build_default_engine
 
-# Default engine with all built-ins
+# Default engine with all built-ins and default security limits
 engine = build_default_engine()
 
-# Custom specials (None = use defaults: $ref, $eval, $cast, $and, $or, $not)
+# Custom specials (None = use defaults: $ref, $eval, $cast, $and, $or, $not, comparison, math, string, regex)
 engine = build_default_engine(
     specials={"$ref": my_ref_handler, "$custom": my_handler},
     casters={"int": lambda x: int(x), "json": lambda x: json.loads(x)},  # Used in ${type:...} AND $cast
     jmes_options=jmespath.Options(custom_functions=CustomFunctions())
+)
+
+# Custom security limits (see Security and Limits section)
+engine = build_default_engine(
+    max_operations=10_000,
+    max_function_recursion_depth=50,
+    max_loop_iterations=1_000,
+    regex_timeout=1.0,
+    pow_max_exponent=100,
+    # ... see factory.py for all available limits
 )
 ```
 
@@ -136,6 +146,181 @@ result = engine.apply(
 ```
 
 **Returns:** Deep copy of the final `dest` after all transformations.
+
+---
+
+## Security and Limits
+
+J-Perm includes comprehensive protection against DoS attacks through configurable limits. All limits can be customized via `build_default_engine()` parameters.
+
+### Global Limits
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `max_operations` | 1,000,000 | Maximum total operations across entire transformation |
+| `max_function_recursion_depth` | 100 | Maximum depth for recursive function calls |
+
+**Example: Preventing infinite recursion**
+
+```python
+engine = build_default_engine(max_function_recursion_depth=50)
+
+# This will raise RuntimeError if recursion exceeds 50 levels
+spec = [
+    {"$def": "factorial", "params": ["n"], "body": [
+        {"op": "if", "cond": {"$eq": [{"$ref": "/n"}, 0]},
+         "then": [{"/result": 1}],
+         "else": [{"/result": {"$mul": [
+             {"$ref": "/n"},
+             {"$func": "factorial", "args": [{"$sub": [{"$ref": "/n"}, 1]}]}
+         ]}}]}
+    ], "return": "/result"},
+    {"/output": {"$func": "factorial", "args": [100]}}  # Too deep!
+]
+```
+
+### Loop and Iteration Limits
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `max_loop_iterations` | 10,000 | Maximum iterations for `while` loops |
+| `max_foreach_items` | 100,000 | Maximum items to process in `foreach` |
+
+**Example: Preventing infinite loops**
+
+```python
+engine = build_default_engine(max_loop_iterations=1000)
+
+# This will raise RuntimeError if loop exceeds 1000 iterations
+spec = {
+    "op": "while",
+    "cond": {"$lt": [{"$ref": "@:/counter"}, 999999]},  # Never stops!
+    "do": [{"/counter": {"$add": [{"$ref": "@:/counter"}, 1]}}]
+}
+```
+
+### Mathematical Operation Limits
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `pow_max_base` | 1,000,000 | Maximum base value for `$pow` |
+| `pow_max_exponent` | 1,000 | Maximum exponent value for `$pow` |
+| `mul_max_operand` | 1,000,000,000 | Maximum numeric operand in `$mul` |
+| `mul_max_string_result` | 1,000,000 | Maximum string length from `$mul` (e.g., `"x" * n`) |
+| `add_max_number_result` | 1e15 | Maximum numeric result from `$add` |
+| `add_max_string_result` | 100,000,000 | Maximum string length from `$add` (concatenation) |
+| `sub_max_number_result` | 1e15 | Maximum numeric result from `$sub` |
+
+**Example: Preventing CPU exhaustion**
+
+```python
+engine = build_default_engine(
+    pow_max_base=1000,
+    pow_max_exponent=10
+)
+
+# This will raise ValueError: exponent exceeds limit
+spec = {"/result": {"$pow": [2, 1000]}}  # 2^1000 would consume massive CPU
+
+# This will raise ValueError: base exceeds limit
+spec = {"/result": {"$pow": [999999, 2]}}
+```
+
+### String Operation Limits
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `str_max_split_results` | 100,000 | Maximum results from `$str_split` |
+| `str_max_join_result` | 10,000,000 | Maximum length of `$str_join` result |
+| `str_max_replace_result` | 10,000,000 | Maximum length of `$str_replace` result |
+
+**Example: Preventing memory exhaustion**
+
+```python
+engine = build_default_engine(str_max_split_results=1000)
+
+# This will raise ValueError if split produces more than 1000 results
+spec = {"/words": {"$str_split": {"string": "${/large_text}", "delimiter": " "}}}
+```
+
+### Regex Protection (ReDoS Prevention)
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `regex_timeout` | 2.0 | Timeout in seconds for regex operations |
+| `regex_allowed_flags` | None | Bitmask of allowed regex flags (None = all allowed) |
+
+**Example: Preventing ReDoS attacks**
+
+```python
+engine = build_default_engine(regex_timeout=1.0)
+
+# This will raise TimeoutError if regex takes more than 1 second
+spec = {
+    "/result": {
+        "$regex_match": {
+            "pattern": "(a+)+b",  # Catastrophic backtracking pattern
+            "string": "aaaaaaaaaaaaaaaaaaaaaaaac"  # No match, tries all combinations
+        }
+    }
+}
+```
+
+**Restricting regex flags:**
+
+```python
+import re
+
+# Only allow case-insensitive and multiline flags
+engine = build_default_engine(
+    regex_allowed_flags=re.IGNORECASE | re.MULTILINE
+)
+
+# This will raise ValueError: prohibited regex flags
+spec = {
+    "/result": {
+        "$regex_match": {
+            "pattern": "test",
+            "string": "TEST",
+            "flags": re.DOTALL  # Not allowed!
+        }
+    }
+}
+```
+
+### Customizing Limits
+
+All limits can be configured when building the engine:
+
+```python
+from j_perm import build_default_engine
+
+# Conservative limits for untrusted input
+secure_engine = build_default_engine(
+    max_operations=10_000,
+    max_function_recursion_depth=10,
+    max_loop_iterations=100,
+    max_foreach_items=1_000,
+    regex_timeout=0.5,
+    pow_max_exponent=100,
+    str_max_join_result=100_000,
+)
+
+# Relaxed limits for trusted environments
+permissive_engine = build_default_engine(
+    max_operations=10_000_000,
+    max_function_recursion_depth=1000,
+    max_loop_iterations=1_000_000,
+    regex_timeout=10.0,
+)
+```
+
+**Best practices:**
+- Use **conservative limits** when processing untrusted user input
+- Use **permissive limits** for internal data transformations
+- **Monitor** `max_operations` counter to detect suspicious activity
+- **Test** your transformations with realistic data sizes
+- **Tune** limits based on your specific use case
 
 ---
 
@@ -362,41 +547,85 @@ engine = build_default_engine(casters={"upper": custom_upper})
 ```json
 {
     "$and": [
-        [{"op": "assert", "path": "/x", "return": true}],
-        [{"op": "copy", "from": "/y", "path": "/"}]
+        {"$ref": "/x"},
+        {"$gt": [{"$ref": "/y"}, 10]},
+        {"$eq": [{"$ref": "/status"}, "active"]}
     ]
 }
 ```
 
-- Executes actions in order with empty `dest` for each
+- Processes values in order through value pipeline
 - Returns last result if all are truthy
 - Short-circuits and returns first falsy result
+
+**Example:**
+
+```python
+# Check multiple conditions
+spec = {
+    "/is_valid": {
+        "$and": [
+            {"$ref": "/user/name"},           # truthy if name exists
+            {"$gte": [{"$ref": "/user/age"}, 18]},  # age >= 18
+            {"$in": ["admin", {"$ref": "/user/roles"}]}  # has admin role
+        ]
+    }
+}
+```
 
 #### `$or` — Logical OR with short-circuit
 
 ```json
 {
     "$or": [
-        [{"op": "assert", "path": "/x", "return": true}],
-        [{"op": "copy", "from": "/y", "path": "/"}]
+        {"$ref": "/x"},
+        {"$ref": "/y"},
+        {"$ref": "/z"}
     ]
 }
 ```
 
-- Executes actions in order with empty `dest` for each
+- Processes values in order through value pipeline
 - Returns first truthy result
 - Returns last result if all are falsy
+
+**Example:**
+
+```python
+# Provide fallback values
+spec = {
+    "/display_name": {
+        "$or": [
+            {"$ref": "/user/preferred_name"},
+            {"$ref": "/user/full_name"},
+            {"$ref": "/user/email"},
+            "Unknown User"
+        ]
+    }
+}
+```
 
 #### `$not` — Logical negation
 
 ```json
 {
-    "$not": [{"op": "assert", "path": "/missing", "return": true}]
+    "$not": {"$ref": "/disabled"}
 }
 ```
 
-- Executes action with empty `dest`
+- Processes value through value pipeline
 - Returns logical negation of the result
+
+**Example:**
+
+```python
+# Negate condition
+spec = {
+    "/is_enabled": {
+        "$not": {"$ref": "/settings/disabled"}
+    }
+}
+```
 
 #### Comparison Operators
 
@@ -689,7 +918,7 @@ All regex constructs accept optional `flags` parameter (e.g., `re.IGNORECASE = 2
 
 ---
 
-### 4. Functions and Error Handling
+### 6. Functions and Error Handling
 
 J-Perm supports defining reusable functions and controlled error handling.
 
@@ -809,7 +1038,7 @@ Raises a `JPermError` with the specified message. The error can be:
 
 ---
 
-### 5. Shorthand Syntax
+### 7. Shorthand Syntax
 
 Shorthands are expanded by **priority-ordered StageProcessors** before execution.
 
@@ -1431,13 +1660,14 @@ J-Perm provides pre-organized groups of construct handlers for convenient regist
 ```python
 from j_perm import build_default_engine
 from j_perm import (
-    CORE_HANDLERS,         # $ref, $eval
-    LOGICAL_HANDLERS,      # $and, $or, $not
-    COMPARISON_HANDLERS,   # $gt, $gte, $lt, $lte, $eq, $ne, $in
-    MATH_HANDLERS,         # $add, $sub, $mul, $div, $pow, $mod
-    STRING_HANDLERS,       # All string operations (11 constructs)
-    REGEX_HANDLERS,        # All regex operations (5 constructs)
-    get_all_handlers,      # Function to get all handlers with casters
+    CORE_HANDLERS,                # $ref, $eval
+    LOGICAL_HANDLERS,             # $and, $or, $not
+    COMPARISON_HANDLERS,          # $gt, $gte, $lt, $lte, $eq, $ne, $in
+    MATH_HANDLERS,                # $add, $sub, $mul, $div, $pow, $mod (with default limits)
+    STRING_HANDLERS,              # All string operations (11 constructs, with default limits)
+    REGEX_HANDLERS,               # All regex operations (5 constructs, with default limits)
+    get_all_handlers,             # Function to get all handlers with casters
+    get_all_handlers_with_limits, # Function to get all handlers with custom limits
 )
 
 # Build engine with specific groups only
@@ -1470,11 +1700,32 @@ from j_perm import (
 - `CORE_HANDLERS` — Core constructs (`$ref`, `$eval`)
 - `LOGICAL_HANDLERS` — Logical operators (`$and`, `$or`, `$not`)
 - `COMPARISON_HANDLERS` — Comparison operators (`$gt`, `$gte`, `$lt`, `$lte`, `$eq`, `$ne`, `$in`)
-- `MATH_HANDLERS` — Mathematical operators (`$add`, `$sub`, `$mul`, `$div`, `$pow`, `$mod`)
-- `STRING_HANDLERS` — String operations (11 constructs)
-- `REGEX_HANDLERS` — Regular expression operations (5 constructs)
+- `MATH_HANDLERS` — Mathematical operators with default limits (`$add`, `$sub`, `$mul`, `$div`, `$pow`, `$mod`)
+- `STRING_HANDLERS` — String operations with default limits (11 constructs)
+- `REGEX_HANDLERS` — Regular expression operations with default limits (5 constructs)
 - `ALL_HANDLERS_NO_CAST` — All handlers except `$cast`
-- `get_all_handlers(casters)` — Function returning all handlers including `$cast`
+- `get_all_handlers(casters)` — Function returning all handlers including `$cast` (with default limits)
+- `get_all_handlers_with_limits(casters, **limits)` — Function returning all handlers with custom limits
+
+**Example with custom limits:**
+
+```python
+from j_perm import get_all_handlers_with_limits
+from j_perm.casters import BUILTIN_CASTERS
+
+# Build handlers with conservative limits
+secure_handlers = get_all_handlers_with_limits(
+    casters=BUILTIN_CASTERS,
+    regex_timeout=1.0,
+    pow_max_exponent=100,
+    str_max_join_result=100_000,
+    mul_max_string_result=100_000,
+    add_max_string_result=1_000_000,
+    sub_max_number_result=1e10,
+)
+
+engine = build_default_engine(specials=secure_handlers)
+```
 
 ---
 
@@ -1827,15 +2078,21 @@ from j_perm import (
 
     # Mathematical operators
     add_handler,
+    make_add_handler,     # Factory with configurable limits
     sub_handler,
+    make_sub_handler,     # Factory with configurable limits
     mul_handler,
+    make_mul_handler,     # Factory with configurable limits
     div_handler,
     pow_handler,
+    make_pow_handler,     # Factory with configurable limits
     mod_handler,
 
     # String operations
     str_split_handler,
+    make_str_split_handler,    # Factory with configurable limits
     str_join_handler,
+    make_str_join_handler,     # Factory with configurable limits
     str_slice_handler,
     str_upper_handler,
     str_lower_handler,
@@ -1843,16 +2100,22 @@ from j_perm import (
     str_lstrip_handler,
     str_rstrip_handler,
     str_replace_handler,
+    make_str_replace_handler,  # Factory with configurable limits
     str_contains_handler,
     str_startswith_handler,
     str_endswith_handler,
 
     # Regex operations
     regex_match_handler,
+    make_regex_match_handler,   # Factory with configurable limits
     regex_search_handler,
+    make_regex_search_handler,  # Factory with configurable limits
     regex_findall_handler,
+    make_regex_findall_handler, # Factory with configurable limits
     regex_replace_handler,
+    make_regex_replace_handler, # Factory with configurable limits
     regex_groups_handler,
+    make_regex_groups_handler,  # Factory with configurable limits
 
     # Function handlers
     DefMatcher,
@@ -1874,6 +2137,7 @@ from j_perm import (
     UpdateHandler,
     DistinctHandler,
     AssertHandler,
+    TryHandler,
 )
 ```
 
