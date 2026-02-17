@@ -15,7 +15,7 @@ from j_perm import (
     PointerResolver,
 )
 from j_perm.core import AsyncStageProcessor, AsyncMiddleware, AsyncActionHandler
-from j_perm.pointer_processor import PointerProcessor
+from j_perm.processors.pointer_processor import PointerProcessor
 
 
 class TestAsyncStageProcessor:

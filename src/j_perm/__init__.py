@@ -18,6 +18,7 @@ factory.py       – ``build_default_engine``
 from .core import (
     ExecutionContext,
     ValueResolver,
+    ValueProcessor,
     StageMatcher,
     StageProcessor,
     AsyncStageProcessor,
@@ -129,6 +130,8 @@ from .matchers import (
 )
 # -- resolvers -----------------------------------------------------
 from .resolvers import PointerResolver
+# -- processors ----------------------------------------------------
+from .processors import PointerProcessor
 # -- stages --------------------------------------------------------
 from .stages import (
     AssertShorthandMatcher,
@@ -139,8 +142,6 @@ from .stages import (
     AssignShorthandProcessor,
     build_default_shorthand_stages,
 )
-# -- pointer processor ------------------------------------------------
-from .pointer_processor import PointerProcessor
 # -- casters -----------------------------------------------------------
 from .casters import BUILTIN_CASTERS
 # -- construct groups --------------------------------------------------
@@ -265,10 +266,10 @@ __all__ = [
     "JPermError",
     # resolvers
     "PointerResolver",
+    # processors
+    "PointerProcessor",
     # factory
     "build_default_engine",
-    # pointer processor
-    "PointerProcessor",
     # casters
     "BUILTIN_CASTERS",
     # construct groups

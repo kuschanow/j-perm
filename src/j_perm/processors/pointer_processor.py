@@ -13,14 +13,12 @@ Examples:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Tuple
+from typing import Any, Tuple
 
-if TYPE_CHECKING:
-    from .core import ExecutionContext
-    from .resolvers.pointer import ValueResolver
+from j_perm.core import ValueProcessor, ExecutionContext
 
 
-class PointerProcessor:
+class PointerProcessor(ValueProcessor):
     """Processes pointers with prefixes and delegates calls to ValueResolver."""
 
     def resolve(self, path: str, ctx: ExecutionContext) -> Tuple[str, Any]:
@@ -73,10 +71,10 @@ class PointerProcessor:
         return ctx.engine.resolver.get(processed_path, data_source)
 
     def set(
-        self,
-        pointer: str,
-        ctx: ExecutionContext,
-        value: Any
+            self,
+            pointer: str,
+            ctx: ExecutionContext,
+            value: Any
     ) -> None:
         """Sets value by pointer in dest.
 
@@ -99,10 +97,10 @@ class PointerProcessor:
         ctx.engine.resolver.set(clean_path, ctx.dest, value)
 
     def delete(
-        self,
-        pointer: str,
-        ctx: ExecutionContext,
-        ignore_missing: bool = False
+            self,
+            pointer: str,
+            ctx: ExecutionContext,
+            ignore_missing: bool = False
     ) -> None:
         """Deletes value by pointer from dest.
 

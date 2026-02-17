@@ -14,9 +14,8 @@ from j_perm import (
     ActionMatcher,
     ActionHandler,
     PointerResolver,
-    UnescapeRule,
 )
-from j_perm.pointer_processor import PointerProcessor
+from j_perm.processors.pointer_processor import PointerProcessor
 
 
 class TestExecutionContext:

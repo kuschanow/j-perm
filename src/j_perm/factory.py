@@ -58,7 +58,7 @@ from .handlers.ops import (
 from .handlers.special import SpecialFn, SpecialMatcher, SpecialResolveHandler
 from .handlers.template import TemplMatcher, TemplSubstHandler, template_unescape
 from .matchers import AlwaysMatcher, OpMatcher
-from .pointer_processor import PointerProcessor
+from j_perm.processors.pointer_processor import PointerProcessor
 from .resolvers.pointer import PointerResolver
 from .stages.shorthands import build_default_shorthand_stages
 

@@ -27,10 +27,7 @@ from __future__ import annotations
 import copy
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Callable, List, Optional, Tuple, Union, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from .pointer_processor import PointerProcessor
+from typing import Any, Callable, List, Optional, Tuple, Union
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -131,6 +128,44 @@ class ValueResolver(ABC):
             return True
         except (KeyError, IndexError, TypeError):
             return False
+
+
+class ValueProcessor(ABC):
+    """Abstract interface for processing values during substitution.
+
+    The main use case is to support custom functions in the value pipeline.
+    """
+
+    @abstractmethod
+    def resolve(self, path: str, ctx: ExecutionContext) -> Tuple[str, Any]:
+        """Resolves path with prefix and returns normalized path and data source."""
+        pass
+
+    @abstractmethod
+    def get(self, pointer: str, ctx: ExecutionContext) -> Any:
+        """Read the value at *pointer*"""
+
+    @abstractmethod
+    def set(self, pointer: str, ctx: ExecutionContext, value: Any) -> None:
+        """Write *value* at *pointer*"""
+
+    @abstractmethod
+    def delete(self, pointer: str, ctx: ExecutionContext) -> None:
+        """Delete the value at *pointer*"""
+
+    def exists(self, pointer: str, ctx: ExecutionContext) -> bool:
+        """Checks if path exists with prefix support.
+
+        Args:
+            pointer: JSON pointer with optional prefix
+            ctx: Execution context
+
+        Returns:
+            True if path exists, False otherwise
+        """
+        processed_path, data_source = self.resolve(pointer, ctx)
+        return ctx.engine.resolver.exists(processed_path, data_source)
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -671,7 +706,7 @@ class Engine:
             self,
             *,
             resolver: ValueResolver,
-            processor: PointerProcessor,
+            processor: ValueProcessor,
             main_pipeline: Pipeline,
             value_pipeline: Optional[Pipeline] = None,
             value_max_depth: int = 50,
