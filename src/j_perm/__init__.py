@@ -48,6 +48,15 @@ from .handlers import (
     SpecialFn,
     SpecialMatcher,
     SpecialResolveHandler,
+    # flow control
+    BreakMatcher,
+    BreakHandler,
+    ContinueMatcher,
+    ContinueHandler,
+    # signals
+    BreakSignal,
+    ContinueSignal,
+    ReturnSignal,
     # constructs
     ref_handler,
     eval_handler,
@@ -123,6 +132,8 @@ from .handlers import (
     RaiseMatcher,
     RaiseHandler,
     JPermError,
+    ReturnMatcher,
+    ReturnHandler,
 )
 # -- shared matchers -----------------------------------------------
 from .matchers import (
@@ -259,6 +270,12 @@ __all__ = [
     "DistinctHandler",
     "AssertHandler",
     "TryHandler",
+    # flow control
+    "BreakMatcher",
+    "BreakHandler",
+    "ContinueMatcher",
+    "ContinueHandler",
+    # function
     "DefMatcher",
     "CallMatcher",
     "DefHandler",
@@ -266,6 +283,12 @@ __all__ = [
     "RaiseMatcher",
     "RaiseHandler",
     "JPermError",
+    "ReturnMatcher",
+    "ReturnHandler",
+    # signals
+    "BreakSignal",
+    "ContinueSignal",
+    "ReturnSignal",
     # resolvers
     "PointerResolver",
     # processors

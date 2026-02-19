@@ -18,6 +18,7 @@ import copy
 from typing import Any, Mapping
 
 from ..core import ActionHandler, ExecutionContext
+from .signals import BreakSignal, ContinueSignal, ReturnSignal
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -228,8 +229,20 @@ class ForeachHandler(ActionHandler):
 
         try:
             for elem in arr:
-                foreach_ctx = ctx.copy(new_temp_read_only={var: elem})
-                ctx.dest = ctx.engine.apply_to_context(body, foreach_ctx)
+                # Merge loop variable into existing temp_read_only so that outer
+                # bindings (e.g. function parameters) remain accessible inside the body.
+                foreach_ctx = ctx.copy(new_temp_read_only={**ctx.temp_read_only, var: elem})
+                try:
+                    ctx.dest = ctx.engine.apply_to_context(body, foreach_ctx)
+                except ContinueSignal:
+                    # Preserve changes made before $continue, skip to next element
+                    ctx.dest = foreach_ctx.dest
+                except BreakSignal:
+                    # Preserve changes made before $break, stop the loop
+                    ctx.dest = foreach_ctx.dest
+                    break
+        except ReturnSignal:
+            raise  # Propagate without rollback
         except Exception:
             # Rollback on error
             ctx.dest = snapshot
@@ -305,11 +318,18 @@ class WhileHandler(ActionHandler):
                         break
 
                 # Execute body, preserving metadata (functions)
-                ctx.dest = ctx.engine.apply_to_context(step["do"], ctx)
+                try:
+                    ctx.dest = ctx.engine.apply_to_context(step["do"], ctx)
+                except ContinueSignal:
+                    pass  # ctx.dest already reflects changes; re-evaluate condition
+                except BreakSignal:
+                    break  # ctx.dest already reflects changes; stop the loop
 
                 # After first iteration, always check condition
                 do_while = False
                 iteration += 1
+        except ReturnSignal:
+            raise  # Propagate without rollback
         except Exception:
             # Rollback on error
             ctx.dest = snapshot
@@ -377,6 +397,8 @@ class IfHandler(ActionHandler):
         snapshot = copy.deepcopy(ctx.dest)
         try:
             return ctx.engine.apply_to_context(actions, ctx)
+        except (BreakSignal, ContinueSignal, ReturnSignal):
+            raise  # Don't rollback — propagate control flow signals as-is
         except Exception:
             ctx.dest = snapshot
             raise
@@ -715,6 +737,14 @@ class TryHandler(ActionHandler):
         # Try to execute the main actions
         try:
             ctx.engine.apply_to_context(do_actions, ctx)
+        except (BreakSignal, ContinueSignal, ReturnSignal):
+            # Control flow signals are not errors — propagate them, but run finally first
+            if finally_actions is not None:
+                try:
+                    ctx.engine.apply_to_context(finally_actions, ctx)
+                except Exception:
+                    pass  # Don't suppress the control flow signal with a finally error
+            raise
         except Exception as e:
             error_info = {
                 "_error_type": type(e).__name__,

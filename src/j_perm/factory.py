@@ -42,9 +42,14 @@ from .handlers.constructs import (
     make_regex_replace_handler, make_regex_groups_handler,
 )
 from .handlers.container import ContainerMatcher, RecursiveDescentHandler
+from .handlers.flow import (
+    BreakMatcher, BreakHandler,
+    ContinueMatcher, ContinueHandler,
+)
 from .handlers.function import (
     DefMatcher, CallMatcher, DefHandler, CallHandler,
-    RaiseMatcher, RaiseHandler
+    RaiseMatcher, RaiseHandler,
+    ReturnMatcher, ReturnHandler,
 )
 from .handlers.identity import IdentityHandler
 from .handlers.ops import (
@@ -254,11 +259,6 @@ def build_default_engine(
         matcher=CallMatcher(),
         handler=CallHandler(),
     ))
-    value_reg.register(ActionNode(
-        name="raise", priority=9,
-        matcher=RaiseMatcher(),
-        handler=RaiseHandler(),
-    ))
 
     value_reg.register(ActionNode(
         name="template", priority=8,
@@ -357,6 +357,21 @@ def build_default_engine(
         name="raise", priority=10,
         matcher=RaiseMatcher(),
         handler=RaiseHandler(),
+    ))
+    main_reg.register(ActionNode(
+        name="return", priority=10,
+        matcher=ReturnMatcher(),
+        handler=ReturnHandler(),
+    ))
+    main_reg.register(ActionNode(
+        name="break", priority=10,
+        matcher=BreakMatcher(),
+        handler=BreakHandler(),
+    ))
+    main_reg.register(ActionNode(
+        name="continue", priority=10,
+        matcher=ContinueMatcher(),
+        handler=ContinueHandler(),
     ))
 
     main_pipeline = Pipeline(stages=main_stages, registry=main_reg)
