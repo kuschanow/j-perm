@@ -24,8 +24,8 @@ class TestComplexScenarios:
             "in": "/users",
             "do": {
                 "op": "if",
-                "cond": "${?source.item.age >= `18`}",
-                "then": {"/adults[]": "/item"},
+                "cond": "${?args.item.age >= `18`}",
+                "then": {"/adults[]": "&:/item"},
             },
         }
 
@@ -159,11 +159,11 @@ class TestComplexScenarios:
             "in": "/orders",
             "as": "order",
             "do": [
-                {"op": "set", "path": "/processed/-", "value": {"$ref": "/order"}},
+                {"op": "set", "path": "/processed/-", "value": {"$ref": "&:/order"}},
                 {
                     "op": "set",
                     "path": "/total",
-                    "value": "${?add(dest.total, source.order.total)}",
+                    "value": "${?add(dest.total, args.order.total)}",
                 },
             ],
         }

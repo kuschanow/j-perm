@@ -233,7 +233,7 @@ class TemplSubstHandler(ActionHandler):
         # Build JMESPath data with explicit source/dest namespaces
         # In value pipeline, dest is the current value, real dest is in metadata
         real_dest = ctx.metadata.get('_real_dest', ctx.dest)
-        data = {"source": ctx.source, "dest": real_dest, "metadata": ctx.metadata}
+        data = {"source": ctx.source, "dest": real_dest, "temp": ctx.temp, "args": ctx.temp_read_only}
 
         # 1) Casters
         for prefix, fn in self._casters.items():
@@ -254,9 +254,9 @@ class TemplSubstHandler(ActionHandler):
         if _has_unescaped_placeholder(expr):
             return self._flat_substitute(expr, ctx)
 
-        # 4) JSON Pointer (with prefix support: @:/, _:/, or regular /)
+        # 4) JSON Pointer (with prefix support: @:/, _:/, &:/, !:/, or regular /)
         # Processor handles prefix resolution automatically
-        pointer = expr if expr.startswith(("@:", "_:")) else ("/" + expr.lstrip("/"))
+        pointer = expr if expr.startswith(("@:", "_:", "&:", "!:")) else ("/" + expr.lstrip("/"))
         try:
             return ctx.engine.processor.get(pointer, ctx)
         except Exception:

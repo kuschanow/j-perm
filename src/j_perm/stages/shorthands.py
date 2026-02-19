@@ -182,7 +182,7 @@ class AssignShorthandProcessor(StageProcessor):
                     append = key.endswith("[]")
                     dst = f"{key[:-2]}/-" if append else key
 
-                    if isinstance(value, str) and value.startswith("/"):
+                    if isinstance(value, str) and value.startswith(("/", "_:", "@:", "&:", "!:")):
                         out.append({"op": "copy", "from": value, "path": dst, "ignore_missing": True})
                     else:
                         out.append({"op": "set", "path": dst, "value": value})

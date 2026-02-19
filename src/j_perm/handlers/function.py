@@ -28,7 +28,8 @@ class DefHandler(ActionHandler):
          "params": ["<param_name>", "<second_param_name>"]  # optional, default is empty dict
          "body": <function_body>,
          "return": "<path/in/local/ctx>"  # optional, default is None
-         "on_failure": <failure_actions>  # optional, default is None}
+         "on_failure": <failure_actions>  # optional, default is None,
+         "context": "new|copy|shared"  # optional, default is "copy"}
 
     * ``<function_name>``: The name of the function to define.
     * ``params``: The list of parameters for the function. This is optional and can be an empty list if the function does not take any parameters.
@@ -43,6 +44,7 @@ class DefHandler(ActionHandler):
         body = step["body"]
         return_path = step.get("return")
         on_failure = step.get("on_failure", None)
+        context = step.get("context", "copy")
 
         def function(*args):
             if len(args) != len(params):
@@ -51,9 +53,19 @@ class DefHandler(ActionHandler):
                 # Use current call context if available (for recursive calls)
                 call_ctx = ctx.metadata.get('_current_call_ctx', ctx)
 
+                copy_args = {}
+                if context == "new":
+                    # Create a new context with empty dest and source, but inherit metadata
+                    copy_args = {"new_dest": {}}
+                elif context == "shared":
+                    # Use the same context (dest, source, temp) for the function body
+                    copy_args = {}
+                else:  # default "copy"
+                    copy_args = {"deepcopy_dest": True}
+
                 ctx_copy = call_ctx.copy(
-                    new_source={"_": ctx.source, **{param: arg for param, arg in zip(params, args)}},
-                    deepcopy_dest=True
+                    new_temp_read_only={param: arg for param, arg in zip(params, args)},
+                    **copy_args
                 )
                 result = ctx.engine.apply_to_context(
                     body,
@@ -67,8 +79,7 @@ class DefHandler(ActionHandler):
                 if on_failure is not None:
                     call_ctx = ctx.metadata.get('_current_call_ctx', ctx)
                     ctx_copy = call_ctx.copy(
-                        new_source={"_": ctx.source, **{param: arg for param, arg in zip(params, args)}},
-                        deepcopy_dest=True
+                        new_temp_read_only={param: arg for param, arg in zip(params, args)},
                     )
                     return ctx.engine.apply_to_context(on_failure, ctx_copy)
                 else:

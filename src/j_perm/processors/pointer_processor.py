@@ -25,7 +25,7 @@ class PointerProcessor(ValueProcessor):
         """Resolves path with prefix and returns normalized path and data source.
 
         Args:
-            path: Path with optional prefix (@:/, _:/, or plain /)
+            path: Path with optional prefix (@:/, _:/, &:/, !:/ or plain /)
             ctx: Execution context
 
         Returns:
@@ -33,8 +33,11 @@ class PointerProcessor(ValueProcessor):
 
         Examples:
             "@:/user/name" -> ("/user/name", ctx.dest)
-            "_:/config" -> ("/config", ctx.metadata)
+            "_:/config" -> ("/config", ctx.source)
+            "&:/settings" -> ("/settings", ctx.temp_read_only)
+            "!:/cache" -> ("/cache", ctx.temp)
             "/data" -> ("/data", ctx.source)
+
         """
         if path.startswith("@:/") or path.startswith("@:"):
             # Dest pointer
@@ -48,7 +51,19 @@ class PointerProcessor(ValueProcessor):
             # Metadata pointer
             normalized = path[2:].lstrip("/")
             normalized = "/" + normalized if normalized else "/"
-            return normalized, ctx.metadata
+            return normalized, ctx.source
+
+        elif path.startswith("&:/") or path.startswith("&:"):
+            # Temp read-only pointer
+            normalized = path[2:].lstrip("/")
+            normalized = "/" + normalized if normalized else "/"
+            return normalized, ctx.temp_read_only
+
+        elif path.startswith("!:/") or path.startswith("!:"):
+            # Temp pointer
+            normalized = path[2:].lstrip("/")
+            normalized = "/" + normalized if normalized else "/"
+            return normalized, ctx.temp
 
         else:
             # Source pointer (default)
@@ -85,13 +100,13 @@ class PointerProcessor(ValueProcessor):
 
         Note:
             Write operations always execute in ctx.dest, as source is immutable.
-            Prefixes @:/, _:/ are ignored.
+            Prefixes @:/, &:/ are ignored.
         """
         # Remove prefix if present (set always to dest)
         clean_path = pointer
         if pointer.startswith("@:/") or pointer.startswith("@:"):
             clean_path = "/" + pointer[2:].lstrip("/")
-        elif pointer.startswith("_:/") or pointer.startswith("_:"):
+        elif pointer.startswith("&:/") or pointer.startswith("&:"):
             clean_path = "/" + pointer[2:].lstrip("/")
 
         ctx.engine.resolver.set(clean_path, ctx.dest, value)
@@ -114,13 +129,13 @@ class PointerProcessor(ValueProcessor):
 
         Note:
             Delete operations always execute in ctx.dest, as source is immutable.
-            Prefixes @:/, _:/ are ignored for backward compatibility.
+            Prefixes @:/, &:/ are ignored for backward compatibility.
         """
         # Remove prefix if present (delete always from dest)
         clean_path = pointer
         if pointer.startswith("@:/") or pointer.startswith("@:"):
             clean_path = "/" + pointer[2:].lstrip("/")
-        elif pointer.startswith("_:/") or pointer.startswith("_:"):
+        elif pointer.startswith("&:/") or pointer.startswith("_:"):
             clean_path = "/" + pointer[2:].lstrip("/")
 
         # resolver.delete doesn't support ignore_missing, handle manually

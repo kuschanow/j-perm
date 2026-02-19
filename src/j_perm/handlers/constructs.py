@@ -22,8 +22,9 @@ from __future__ import annotations
 
 import copy
 import re
+from typing import Any, Mapping, Callable
+
 import regex
-from typing import Any, Mapping, Tuple, Callable
 
 from ..core import ExecutionContext
 
@@ -86,7 +87,7 @@ def eval_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
         {"$eval": {"op": "copy", "from": "/x", "path": "/y"}, "$select": "/y"}
     """
     # Execute the nested actions with fresh dest, preserving metadata
-    eval_ctx = ctx.copy(new_dest={}, deepcopy_dest=False)
+    eval_ctx = ctx.copy(new_dest={})
 
     # Temporarily remove _real_dest to prevent @: references from accessing parent dest
     # This ensures eval is properly isolated
@@ -326,9 +327,61 @@ def ne_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
     return left != right
 
 
+def in_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$in`` construct: membership test (like Python's ``in`` operator).
+
+    Schema::
+
+        {"$in": [<value>, <container>]}
+
+    Behavior:
+    * Both values are processed through ``process_value``
+    * For strings: checks if value is a substring of container
+    * For lists/tuples: checks if value is in the list
+    * For dicts: checks if value is a key in the dict
+    * Returns boolean
+
+    Examples::
+
+        {"$in": ["world", "hello world"]}             → True (substring)
+        {"$in": [2, [1, 2, 3]]}                       → True (element in list)
+        {"$in": ["key", {"key": "value"}]}            → True (key in dict)
+        {"$in": ["x", "hello"]}                       → False
+        {"$in": [{"$ref": "/search"}, "${/text}"]}    → True/False
+    """
+    if not isinstance(node["$in"], list) or len(node["$in"]) != 2:
+        raise ValueError("$in requires a list of exactly 2 values: [value, container]")
+
+    value = ctx.engine.process_value(node["$in"][0], ctx)
+    container = ctx.engine.process_value(node["$in"][1], ctx)
+
+    return value in container
+
+
+def exists_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$exists`` construct: checks if a pointer exists in path.
+
+    Schema::
+
+        {"$exists": "/path/to/value"}
+
+    Behavior:
+    * Checks if the specified pointer can be resolved without error
+    * Returns boolean
+
+    Examples::
+
+        {"$exists": "/user/name"}     # checks if name exists in source
+        {"$exists": "@:/user/name"}   # checks if name exists in dest
+    """
+    ptr = ctx.engine.process_value(node["$exists"], ctx, _unescape=False)
+
+    return ctx.engine.processor.exists(ptr, ctx)
+
+
 def make_add_handler(
-    max_number_result: float = 1e15,
-    max_string_result: int = 100_000_000,
+        max_number_result: float = 1e15,
+        max_string_result: int = 100_000_000,
 ) -> Callable[[Mapping[str, Any], ExecutionContext], Any]:
     """Factory for ``$add`` handler with security limits.
 
@@ -339,6 +392,7 @@ def make_add_handler(
     Returns:
         Handler function for ``$add`` construct.
     """
+
     def add_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
         """``$add`` construct: addition with security limits.
 
@@ -391,7 +445,7 @@ add_handler = make_add_handler()
 
 
 def make_sub_handler(
-    max_number_result: float = 1e15,
+        max_number_result: float = 1e15,
 ) -> Callable[[Mapping[str, Any], ExecutionContext], Any]:
     """Factory for ``$sub`` handler with security limits.
 
@@ -401,6 +455,7 @@ def make_sub_handler(
     Returns:
         Handler function for ``$sub`` construct.
     """
+
     def sub_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
         """``$sub`` construct: subtraction with security limits.
 
@@ -447,8 +502,8 @@ sub_handler = make_sub_handler()
 
 
 def make_mul_handler(
-    max_string_result: int = 1_000_000,
-    max_operand: float = 1e9,
+        max_string_result: int = 1_000_000,
+        max_operand: float = 1e9,
 ) -> Callable[[Mapping[str, Any], ExecutionContext], Any]:
     """Factory for ``$mul`` handler with security limits.
 
@@ -459,6 +514,7 @@ def make_mul_handler(
     Returns:
         Handler function for ``$mul`` construct.
     """
+
     def mul_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
         """``$mul`` construct: multiplication with security limits.
 
@@ -551,8 +607,8 @@ def div_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
 
 
 def make_pow_handler(
-    max_base: float = 1e6,
-    max_exponent: float = 1000,
+        max_base: float = 1e6,
+        max_exponent: float = 1000,
 ) -> Callable[[Mapping[str, Any], ExecutionContext], Any]:
     """Factory for ``$pow`` handler with security limits.
 
@@ -563,6 +619,7 @@ def make_pow_handler(
     Returns:
         Handler function for ``$pow`` construct.
     """
+
     def pow_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
         """``$pow`` construct: exponentiation with security limits.
 
@@ -651,44 +708,13 @@ def mod_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
     return result
 
 
-def in_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
-    """``$in`` construct: membership test (like Python's ``in`` operator).
-
-    Schema::
-
-        {"$in": [<value>, <container>]}
-
-    Behavior:
-    * Both values are processed through ``process_value``
-    * For strings: checks if value is a substring of container
-    * For lists/tuples: checks if value is in the list
-    * For dicts: checks if value is a key in the dict
-    * Returns boolean
-
-    Examples::
-
-        {"$in": ["world", "hello world"]}             → True (substring)
-        {"$in": [2, [1, 2, 3]]}                       → True (element in list)
-        {"$in": ["key", {"key": "value"}]}            → True (key in dict)
-        {"$in": ["x", "hello"]}                       → False
-        {"$in": [{"$ref": "/search"}, "${/text}"]}    → True/False
-    """
-    if not isinstance(node["$in"], list) or len(node["$in"]) != 2:
-        raise ValueError("$in requires a list of exactly 2 values: [value, container]")
-
-    value = ctx.engine.process_value(node["$in"][0], ctx)
-    container = ctx.engine.process_value(node["$in"][1], ctx)
-
-    return value in container
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # String operations
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 def make_str_split_handler(
-    max_results: int = 100_000,
+        max_results: int = 100_000,
 ) -> Callable[[Mapping[str, Any], ExecutionContext], Any]:
     """Factory for ``$str_split`` handler with security limits.
 
@@ -698,6 +724,7 @@ def make_str_split_handler(
     Returns:
         Handler function for ``$str_split`` construct.
     """
+
     def str_split_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
         """``$str_split`` construct: split string by delimiter.
 
@@ -752,7 +779,7 @@ str_split_handler = make_str_split_handler()
 
 
 def make_str_join_handler(
-    max_result_length: int = 10_000_000,
+        max_result_length: int = 10_000_000,
 ) -> Callable[[Mapping[str, Any], ExecutionContext], Any]:
     """Factory for ``$str_join`` handler with security limits.
 
@@ -762,6 +789,7 @@ def make_str_join_handler(
     Returns:
         Handler function for ``$str_join`` construct.
     """
+
     def str_join_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
         """``$str_join`` construct: join list of strings with separator.
 
@@ -988,7 +1016,7 @@ def str_rstrip_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
 
 
 def make_str_replace_handler(
-    max_result_length: int = 10_000_000,
+        max_result_length: int = 10_000_000,
 ) -> Callable[[Mapping[str, Any], ExecutionContext], Any]:
     """Factory for ``$str_replace`` handler with security limits.
 
@@ -998,6 +1026,7 @@ def make_str_replace_handler(
     Returns:
         Handler function for ``$str_replace`` construct.
     """
+
     def str_replace_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
         """``$str_replace`` construct: replace substring.
 
@@ -1126,8 +1155,8 @@ def str_endswith_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
 
 
 def make_regex_match_handler(
-    timeout: float = 2.0,
-    allowed_flags: int | None = None,
+        timeout: float = 2.0,
+        allowed_flags: int | None = None,
 ) -> Callable[[Mapping[str, Any], ExecutionContext], Any]:
     """Factory for ``$regex_match`` handler with security limits.
 
@@ -1195,8 +1224,8 @@ regex_match_handler = make_regex_match_handler()
 
 
 def make_regex_search_handler(
-    timeout: float = 2.0,
-    allowed_flags: int | None = None,
+        timeout: float = 2.0,
+        allowed_flags: int | None = None,
 ) -> Callable[[Mapping[str, Any], ExecutionContext], Any]:
     """Factory for ``$regex_search`` handler with security limits.
 
@@ -1255,8 +1284,8 @@ regex_search_handler = make_regex_search_handler()
 
 
 def make_regex_findall_handler(
-    timeout: float = 2.0,
-    allowed_flags: int | None = None,
+        timeout: float = 2.0,
+        allowed_flags: int | None = None,
 ) -> Callable[[Mapping[str, Any], ExecutionContext], Any]:
     """Factory for ``$regex_findall`` handler with security limits.
 
@@ -1314,8 +1343,8 @@ regex_findall_handler = make_regex_findall_handler()
 
 
 def make_regex_replace_handler(
-    timeout: float = 2.0,
-    allowed_flags: int | None = None,
+        timeout: float = 2.0,
+        allowed_flags: int | None = None,
 ) -> Callable[[Mapping[str, Any], ExecutionContext], Any]:
     """Factory for ``$regex_replace`` handler with security limits.
 
@@ -1378,8 +1407,8 @@ regex_replace_handler = make_regex_replace_handler()
 
 
 def make_regex_groups_handler(
-    timeout: float = 2.0,
-    allowed_flags: int | None = None,
+        timeout: float = 2.0,
+        allowed_flags: int | None = None,
 ) -> Callable[[Mapping[str, Any], ExecutionContext], Any]:
     """Factory for ``$regex_groups`` handler with security limits.
 
