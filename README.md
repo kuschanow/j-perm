@@ -3,7 +3,7 @@
 A composable JSON transformation DSL with a powerful, extensible architecture.
 
 J-Perm lets you describe data transformations as **executable specifications** — a list of steps that can be applied to input documents. It supports
-JSON Pointer addressing with slicing (arrays and strings), template interpolation with `${...}` syntax, special constructs (`$ref`, `$eval`, `$cast`), logical and comparison operators (`$and`, `$or`, `$not`), comparison operators (6 operators plus `$in` and `$exists`), mathematical operations (6 operators), comprehensive string manipulation (11 operations), regular expressions (5 operations), user-defined functions (`$def`, `$func`, `$raise`), error handling (`try-except-finally`), and a rich set of built-in operations — all with configurable security limits to prevent DoS attacks.
+JSON Pointer addressing with slicing (arrays and strings), template interpolation with `${...}` syntax, special constructs (`$ref`, `$eval`, `$cast`), logical and comparison operators (`$and`, `$or`, `$not`), comparison operators (6 operators plus `$in` and `$exists`), mathematical operations (6 operators), comprehensive string manipulation (11 operations), regular expressions (5 operations), user-defined functions (`$def`, `$func`, `$raise`) with loop/function control flow (`$break`, `$continue`, `$return`), error handling (`try-except-finally`), and a rich set of built-in operations — all with configurable security limits to prevent DoS attacks.
 
 ---
 
@@ -988,7 +988,7 @@ J-Perm supports defining reusable functions and controlled error handling.
 
 - `params` — list of parameter names (optional, default: `[]`)
 - `body` — actions to execute when function is called
-- `return` — path in local context to return (optional, default: entire dest)
+- `return` — path in local context to return (optional, default: entire dest); superseded by `$return` if used inside the body
 - `context` — how the function's dest is initialized (see below)
 - `on_failure` — error handler actions (optional)
 
@@ -1114,7 +1114,157 @@ spec = [
 
 ---
 
-### 7. Shorthand Syntax
+### 7. Loop Control Flow
+
+`$break`, `$continue`, and `$return` are **control flow commands** for interrupting loops and functions.  They are top-level actions (registered in the main pipeline) and work from anywhere inside a loop or function body — including inside nested `if`, `try`, or even other loops.
+
+#### `$break` — Exit a loop
+
+```json
+{"$break": null}
+```
+
+Stops the innermost `foreach` or `while` loop immediately.  Any changes made to `dest` **before** `$break` in the current iteration are preserved.
+
+```python
+spec = {
+    "op": "foreach",
+    "in": "/items",
+    "as": "item",
+    "do": [
+        {
+            "op": "if",
+            "cond": {"$eq": [{"$ref": "&:/item"}, "stop"]},
+            "then": [{"$break": None}],
+        },
+        {"/result[]": "&:/item"},
+    ],
+}
+
+result = engine.apply(spec, source={"items": ["a", "b", "stop", "c"]}, dest={"result": []})
+# → {"result": ["a", "b"]}
+```
+
+#### `$continue` — Skip to the next iteration
+
+```json
+{"$continue": null}
+```
+
+Skips the remaining actions in the current iteration and moves to the next element (`foreach`) or re-evaluates the condition (`while`).  Changes made **before** `$continue` are preserved.
+
+```python
+spec = {
+    "op": "foreach",
+    "in": "/numbers",
+    "as": "n",
+    "do": [
+        {
+            "op": "if",
+            "cond": {"$eq": [{"$mod": [{"$ref": "&:/n"}, 2]}, 0]},
+            "then": [{"$continue": None}],   # skip even numbers
+        },
+        {"/odds[]": "&:/n"},
+    ],
+}
+
+result = engine.apply(spec, source={"numbers": [1, 2, 3, 4, 5]}, dest={"odds": []})
+# → {"odds": [1, 3, 5]}
+```
+
+#### `$return` — Return a value from a function
+
+```json
+{"$return": <value>}
+```
+
+Exits the current function immediately, returning `<value>` as the function result.  The value is evaluated through the value pipeline (supports `$ref`, templates, constructs).  Use `null` to return `None`.
+
+This **supersedes** the `"return": "/path"` parameter in `$def` when you need to return from multiple points in the body (early return, return from inside a loop, etc.).
+
+```python
+spec = [
+    {
+        "$def": "sign",
+        "params": ["x"],
+        "body": [
+            {
+                "op": "if",
+                "cond": {"$gt": [{"$ref": "&:/x"}, 0]},
+                "then": [{"$return": "positive"}],
+            },
+            {
+                "op": "if",
+                "cond": {"$lt": [{"$ref": "&:/x"}, 0]},
+                "then": [{"$return": "negative"}],
+            },
+            {"$return": "zero"},
+        ],
+    },
+    {"/result": {"$func": "sign", "args": [-3]}},
+]
+
+result = engine.apply(spec, source={}, dest={})
+# → {"result": "negative"}
+```
+
+**Early return from inside a loop:**
+
+```python
+spec = [
+    {
+        "$def": "find_first",
+        "params": ["items", "target"],
+        "body": [
+            {
+                "op": "foreach",
+                "in": "&:/items",
+                "as": "item",
+                "do": [
+                    {
+                        "op": "if",
+                        "cond": {"$eq": [{"$ref": "&:/item"}, {"$ref": "&:/target"}]},
+                        "then": [{"$return": {"$ref": "&:/item"}}],
+                    },
+                ],
+            },
+            {"$return": None},   # not found
+        ],
+    },
+    {"/found": {"$func": "find_first", "args": [["a", "b", "c"], "b"]}},
+]
+
+result = engine.apply(spec, source={}, dest={})
+# → {"found": "b"}
+```
+
+#### Interaction with `try`
+
+Control flow signals propagate **through** `try` blocks — they are never caught by `except`.  The `finally` block still runs before the signal continues propagating.
+
+```python
+spec = [
+    {
+        "$def": "func",
+        "body": [
+            {
+                "op": "try",
+                "do": [{"$return": "early"}],
+                "except": [{"/caught": True}],   # NOT reached
+                "finally": [{"/cleanup": True}],  # always runs
+            },
+        ],
+    },
+    {"/answer": {"$func": "func"}},
+]
+
+result = engine.apply(spec, source={}, dest={})
+# → {"answer": "early"}   ("caught" is never set, "cleanup" is set inside the function)
+```
+
+---
+
+### 8. Shorthand Syntax
 
 Shorthands are expanded by **priority-ordered StageProcessors** before execution.
 
@@ -1320,6 +1470,8 @@ Iterate over array/mapping.
 
 **Note:** If source is a dict, iterates over `(key, value)` tuples.
 
+**Loop control:** Use `$break` to exit the loop early or `$continue` to skip the rest of the current iteration (see [Loop Control Flow](#loop-control-flow)).
+
 **Accessing the loop variable:**
 
 The loop variable is stored in `temp_read_only` and is accessible inside `do` blocks via:
@@ -1392,6 +1544,8 @@ Loop while condition holds.
 ```
 
 **Note:** Condition is checked against destination state. Use `do_while: true` to execute body at least once before checking condition.
+
+**Loop control:** Use `$break` to exit the loop early or `$continue` to skip the rest of the current iteration and re-evaluate the condition (see [Loop Control Flow](#loop-control-flow)).
 
 ---
 
@@ -1604,6 +1758,7 @@ Inside the `except` block, error info is available via the `&:` prefix:
   - If `except` block provided, executes it with error info accessible via `&:/` prefix
   - If no `except`, re-raises error after executing `finally` (if present)
 - `finally` block always executes (even on error)
+- Control flow signals (`$break`, `$continue`, `$return`) are **not** caught by `except` — they propagate through the `try` block; `finally` still runs before they propagate
 
 **Error info in except:**
 - `&:/_error_type` — error class name (e.g., `"JPermError"`)
@@ -2215,6 +2370,19 @@ from j_perm import (
     RaiseMatcher,
     RaiseHandler,
     JPermError,
+    ReturnMatcher,
+    ReturnHandler,
+
+    # Loop control flow handlers
+    BreakMatcher,
+    BreakHandler,
+    ContinueMatcher,
+    ContinueHandler,
+
+    # Control flow signals (exceptions)
+    BreakSignal,    # raised by $break
+    ContinueSignal, # raised by $continue
+    ReturnSignal,   # raised by $return (.value holds the return value)
 
     # Operation handlers
     SetHandler,
@@ -2362,7 +2530,68 @@ result = engine.apply(spec, source={"user_input": "-5"}, dest={})
 # → {"age": -5, "valid": False, "error": "Age cannot be negative"}
 ```
 
-### Example 7: $exists for Optional Fields
+### Example 7: Loop Control with $break and $continue
+
+```python
+# Collect items until sentinel, skipping nulls
+spec = {
+    "op": "foreach",
+    "in": "/stream",
+    "as": "item",
+    "do": [
+        {
+            "op": "if",
+            "cond": {"$eq": [{"$ref": "&:/item"}, None]},
+            "then": [{"$continue": None}],  # skip null
+        },
+        {
+            "op": "if",
+            "cond": {"$eq": [{"$ref": "&:/item"}, "END"]},
+            "then": [{"$break": None}],     # stop at sentinel
+        },
+        {"/result[]": "&:/item"},
+    ],
+}
+
+result = engine.apply(
+    spec,
+    source={"stream": ["a", None, "b", "END", "c"]},
+    dest={"result": []},
+)
+# → {"result": ["a", "b"]}
+```
+
+### Example 8: Early Return from a Function
+
+```python
+spec = [
+    {
+        "$def": "first_positive",
+        "params": ["nums"],
+        "body": [
+            {
+                "op": "foreach",
+                "in": "&:/nums",
+                "as": "n",
+                "do": [
+                    {
+                        "op": "if",
+                        "cond": {"$gt": [{"$ref": "&:/n"}, 0]},
+                        "then": [{"$return": {"$ref": "&:/n"}}],
+                    },
+                ],
+            },
+            {"$return": None},
+        ],
+    },
+    {"/result": {"$func": "first_positive", "args": [[-3, -1, 0, 5, 8]]}},
+]
+
+result = engine.apply(spec, source={}, dest={})
+# → {"result": 5}
+```
+
+### Example 9: $exists for Optional Fields
 
 ```python
 spec = [

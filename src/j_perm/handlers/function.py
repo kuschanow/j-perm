@@ -1,6 +1,7 @@
 from typing import Any
 
 from j_perm import ActionHandler, ExecutionContext, ActionMatcher
+from .signals import ReturnSignal
 
 
 class DefMatcher(ActionMatcher):
@@ -60,8 +61,10 @@ class DefHandler(ActionHandler):
                 elif context == "shared":
                     # Use the same context (dest, source, temp) for the function body
                     copy_args = {}
-                else:  # default "copy"
+                elif context == "copy":
                     copy_args = {"deepcopy_dest": True}
+                else:
+                    raise ValueError(f"Invalid context option '{context}' in function definition '{function_name}'")
 
                 ctx_copy = call_ctx.copy(
                     new_temp_read_only={param: arg for param, arg in zip(params, args)},
@@ -75,6 +78,8 @@ class DefHandler(ActionHandler):
                     temp_ctx = ctx.copy(new_source=result)
                     return ctx.engine.processor.get(return_path, temp_ctx)
                 return result
+            except ReturnSignal as e:
+                return e.value
             except Exception as e:
                 if on_failure is not None:
                     call_ctx = ctx.metadata.get('_current_call_ctx', ctx)
@@ -172,3 +177,57 @@ class RaiseHandler(ActionHandler):
     def execute(self, step: Any, ctx: ExecutionContext) -> Any:
         message = ctx.engine.process_value(step["$raise"], ctx)
         raise JPermError(str(message))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# $return — exit the current function with a value
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ReturnMatcher(ActionMatcher):
+    """Match a step by checking the ``$return`` field."""
+
+    def matches(self, step: Any) -> bool:
+        return isinstance(step, dict) and "$return" in step
+
+
+class ReturnHandler(ActionHandler):
+    """``$return`` — exit the current function, returning a value.
+
+    Schema::
+
+        {"$return": <value>}
+
+    * ``<value>`` — expression evaluated through the value pipeline and
+      returned from the enclosing function.  Use ``null`` to return ``None``.
+
+    Raises :class:`~j_perm.handlers.signals.ReturnSignal` which is caught by
+    :class:`DefHandler`.  This allows early returns from anywhere inside the
+    function body (e.g. from inside a loop or an ``if`` branch), and supersedes
+    the ``"return": "/path"`` parameter in ``$def`` when more control is needed.
+
+    Example — early return from inside a loop::
+
+        {
+            "$def": "find_first",
+            "params": ["items", "target"],
+            "body": [
+                {
+                    "op": "foreach",
+                    "in": "&:/items",
+                    "as": "item",
+                    "do": [
+                        {
+                            "op": "if",
+                            "cond": {"$eq": [{"$ref": "&:/item"}, {"$ref": "&:/target"}]},
+                            "then": [{"$return": {"$ref": "&:/item"}}]
+                        }
+                    ]
+                },
+                {"$return": null}
+            ]
+        }
+    """
+
+    def execute(self, step: Any, ctx: ExecutionContext) -> Any:
+        value = ctx.engine.process_value(step["$return"], ctx)
+        raise ReturnSignal(value)

@@ -319,13 +319,17 @@ class TestRaiseHandler:
                 dest={},
             )
 
-    def test_raise_in_value_context(self):
-        """Can use $raise in value context."""
+    def test_raise_as_top_level_action(self):
+        """$raise works as a top-level action."""
         engine = build_default_engine()
 
         with pytest.raises(JPermError, match="Invalid value"):
             engine.apply(
-                {"/result": {"$raise": "Invalid value"}},
+                [
+                    {"/result": "before"},
+                    {"$raise": "Invalid value"},
+                    {"/result": "after"},
+                ],
                 source={},
                 dest={},
             )
@@ -467,19 +471,16 @@ class TestDefContextParameter:
         assert "tmp" not in result
         assert "answer" not in result
 
-    def test_context_invalid_value_falls_back_to_copy(self):
-        """Unknown context value falls through to the else branch (copy)."""
+    def test_context_invalid_value_raises(self):
+        """Unknown context value raises ValueError."""
         engine = build_default_engine()
 
-        result = engine.apply(
-            [
-                {"$def": "f", "context": "bogus", "body": [{"/leak": 1}]},
-                {"/result": {"$func": "f"}},
-            ],
-            source={},
-            dest={},
-        )
-
-        # "bogus" hits the else branch = deepcopy_dest, so no bleed into caller
-        assert "leak" not in result
-        assert "result" in result
+        with pytest.raises(ValueError, match="Invalid context option 'bogus'"):
+            engine.apply(
+                [
+                    {"$def": "f", "context": "bogus", "body": [{"/leak": 1}]},
+                    {"/result": {"$func": "f"}},
+                ],
+                source={},
+                dest={},
+            )

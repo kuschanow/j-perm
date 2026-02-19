@@ -35,10 +35,16 @@ from .constructs import (
     make_regex_replace_handler, make_regex_groups_handler,
 )
 from .container import ContainerMatcher, RecursiveDescentHandler
+from .flow import (
+    BreakMatcher, BreakHandler,
+    ContinueMatcher, ContinueHandler,
+)
 from .function import (
     DefMatcher, CallMatcher, DefHandler, CallHandler,
-    RaiseMatcher, RaiseHandler, JPermError
+    RaiseMatcher, RaiseHandler, JPermError,
+    ReturnMatcher, ReturnHandler,
 )
+from .signals import BreakSignal, ContinueSignal, ReturnSignal
 from .identity import IdentityHandler
 from .ops import (
     SetHandler, CopyHandler,
@@ -127,6 +133,11 @@ __all__ = [
     "DistinctHandler",
     "AssertHandler",
     "TryHandler",
+    # flow control
+    "BreakMatcher",
+    "BreakHandler",
+    "ContinueMatcher",
+    "ContinueHandler",
     # function
     "DefMatcher",
     "CallMatcher",
@@ -135,4 +146,10 @@ __all__ = [
     "RaiseMatcher",
     "RaiseHandler",
     "JPermError",
+    "ReturnMatcher",
+    "ReturnHandler",
+    # signals
+    "BreakSignal",
+    "ContinueSignal",
+    "ReturnSignal",
 ]
