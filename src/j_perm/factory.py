@@ -30,7 +30,7 @@ from .handlers.constructs import (
     gt_handler, gte_handler, lt_handler, lte_handler, eq_handler, ne_handler,
     div_handler, mod_handler,
     make_add_handler, make_sub_handler, make_mul_handler, make_pow_handler,
-    in_handler,
+    in_handler, exists_handler,
     # String operations
     make_str_split_handler, make_str_join_handler, str_slice_handler,
     str_upper_handler, str_lower_handler,
@@ -108,7 +108,7 @@ def build_default_engine(
     value_pipeline
         * ``SpecialResolveHandler``   (priority 10)  – ``$ref``, ``$eval``, ``$cast``,
           ``$and``, ``$or``, ``$not``, ``$gt``, ``$gte``, ``$lt``, ``$lte``, ``$eq``, ``$ne``,
-          ``$add``, ``$sub``, ``$mul``, ``$div``, ``$pow``, ``$mod``.
+          ``$in``, ``$exists``, ``$add``, ``$sub``, ``$mul``, ``$div``, ``$pow``, ``$mod``.
         * ``TemplSubstHandler``       (priority  8)  – ``${…}`` with built-in
           casters (int, float, bool, str), JMESPath function (subtract), and
           dest pointer (@:/path).
@@ -178,6 +178,7 @@ def build_default_engine(
             "$eq": eq_handler,
             "$ne": ne_handler,
             "$in": in_handler,
+            "$exists": exists_handler,
             "$add": make_add_handler(
                 max_number_result=add_max_number_result,
                 max_string_result=add_max_string_result,

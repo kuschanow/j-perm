@@ -148,7 +148,7 @@ class TestForeachOperation:
         engine = build_default_engine()
 
         result = engine.apply(
-            {"op": "foreach", "in": "/items", "do": {"/out[]": "/item"}},
+            {"op": "foreach", "in": "/items", "do": {"/out[]": "&:/item"}},
             source={"items": [1, 2, 3]},
             dest={},
         )
@@ -160,7 +160,7 @@ class TestForeachOperation:
         engine = build_default_engine()
 
         result = engine.apply(
-            {"op": "foreach", "in": "/items", "as": "x", "do": {"/out[]": "/x"}},
+            {"op": "foreach", "in": "/items", "as": "x", "do": {"/out[]": "&:/x"}},
             source={"items": ["a", "b"]},
             dest={},
         )

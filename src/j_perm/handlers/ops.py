@@ -228,8 +228,7 @@ class ForeachHandler(ActionHandler):
 
         try:
             for elem in arr:
-                extended = {"_": ctx.source, var: elem}
-                foreach_ctx = ctx.copy(new_source=extended)
+                foreach_ctx = ctx.copy(new_temp_read_only={var: elem})
                 ctx.dest = ctx.engine.apply_to_context(body, foreach_ctx)
         except Exception:
             # Rollback on error
@@ -713,30 +712,26 @@ class TryHandler(ActionHandler):
         if do_actions is None:
             raise ValueError("try operation requires 'do' parameter")
 
-        error_occurred = False
-        error_info = None
-
         # Try to execute the main actions
         try:
             ctx.engine.apply_to_context(do_actions, ctx)
         except Exception as e:
-            error_occurred = True
             error_info = {
                 "_error_type": type(e).__name__,
                 "_error_message": str(e),
             }
 
-            # If except block exists, execute it with error info in metadata
+            # If except block exists, execute it with error info in temp_read_only
             if except_actions is not None:
-                # Add error info to metadata
-                ctx.metadata.update(error_info)
+                # Add error info to temp_read_only
+                ctx.temp_read_only.update(error_info)
 
                 try:
                     ctx.engine.apply_to_context(except_actions, ctx)
                 finally:
-                    # Remove error info keys from metadata
-                    ctx.metadata.pop('_error_type', None)
-                    ctx.metadata.pop('_error_message', None)
+                    # Remove error info keys from temp_read_only
+                    ctx.temp_read_only.pop('_error_type', None)
+                    ctx.temp_read_only.pop('_error_message', None)
             else:
                 # No except block, re-raise the error
                 # But first execute finally if it exists

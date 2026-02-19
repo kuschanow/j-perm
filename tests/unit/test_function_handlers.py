@@ -30,7 +30,7 @@ class TestDefHandler:
 
         result = engine.apply(
             [
-                {"$def": "double", "params": ["x"], "body": [{"/result": "${int:${x}}"}]},
+                {"$def": "double", "params": ["x"], "body": [{"/result": "${int:${&:x}}"}]},
                 {"/doubled": {"$func": "double", "args": [10]}},
             ],
             source={},
@@ -49,8 +49,8 @@ class TestDefHandler:
                     "$def": "add",
                     "params": ["a", "b"],
                     "body": [
-                        {"/sum": "${int:${a}}"},
-                        {"/sum": "${int:${b}}"},
+                        {"/sum": "${int:${&:a}}"},
+                        {"/sum": "${int:${&:b}}"},
                     ],
                 },
                 {"/result": {"$func": "add", "args": [5, 3]}},
@@ -91,7 +91,7 @@ class TestDefHandler:
 
         result = engine.apply(
             [
-                {"$def": "getFromSource", "body": [{"/value": {"$ref": "/_/data"}}]},
+                {"$def": "getFromSource", "body": [{"/value": {"$ref": "/data"}}]},
                 {"/result": {"$func": "getFromSource"}},
             ],
             source={"data": "source_value"},
@@ -173,7 +173,7 @@ class TestCallHandler:
                 {
                     "$def": "greet",
                     "params": ["name"],
-                    "body": [{"/greeting": "Hello ${name}"}],
+                    "body": [{"/greeting": "Hello ${&:/name}"}],
                 },
                 {"/result": {"$func": "greet", "args": ["World"]}},
             ],
@@ -329,3 +329,157 @@ class TestRaiseHandler:
                 source={},
                 dest={},
             )
+
+
+class TestDefContextParameter:
+    """Test $def 'context' parameter: 'copy' (default), 'new', 'shared'."""
+
+    def test_context_copy_isolates_dest(self):
+        """Default 'copy' context: function body mutations do not directly alter ctx.dest.
+
+        After calling the function as a value, the outer dest should only have
+        the key explicitly written by the caller — 'internal' must not appear
+        as a *direct* sibling beside 'result' in the outer dest.
+        """
+        engine = build_default_engine()
+
+        result = engine.apply(
+            [
+                {"$def": "f", "body": [{"/internal": 99}]},
+                {"/result": {"$func": "f"}},
+            ],
+            source={},
+            dest={},
+        )
+
+        # The function body modifies its isolated copy, so /internal must not
+        # leak into the outer dest as a top-level key.
+        assert "internal" not in result
+        assert "result" in result
+
+    def test_context_copy_explicit(self):
+        """Explicit 'copy' behaves the same as the default."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            [
+                {"$def": "f", "context": "copy", "body": [{"/internal": 99}]},
+                {"/result": {"$func": "f"}},
+            ],
+            source={},
+            dest={},
+        )
+
+        assert "internal" not in result
+        assert "result" in result
+
+    def test_context_new_starts_empty_dest(self):
+        """'new' context: function receives empty dest regardless of caller state."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            [
+                {"/outer": "hello"},
+                {
+                    "$def": "f",
+                    "context": "new",
+                    "body": [{"/saw_outer": {"$exists": "@:/outer"}}],
+                    "return": "/saw_outer",
+                },
+                {"/result": {"$func": "f"}},
+            ],
+            source={},
+            dest={},
+        )
+
+        assert result["result"] is False
+
+    def test_context_new_does_not_leak(self):
+        """'new' context: mutations inside do not appear in outer dest."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            [
+                {"$def": "f", "context": "new", "body": [{"/secret": 42}]},
+                {"/result": {"$func": "f"}},
+            ],
+            source={},
+            dest={},
+        )
+
+        assert "secret" not in result
+        assert "result" in result
+
+    def test_context_shared_mutates_caller_dest(self):
+        """'shared' context: mutations inside function DO appear in caller's dest."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            [
+                {"$def": "f", "context": "shared", "body": [{"/written_by_func": True}]},
+                {"$func": "f"},
+            ],
+            source={},
+            dest={},
+        )
+
+        assert result.get("written_by_func") is True
+
+    def test_context_shared_sees_caller_dest(self):
+        """'shared' context: function can read values set by the caller."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            [
+                {"/x": 10},
+                {
+                    "$def": "f",
+                    "context": "shared",
+                    "body": [{"/doubled": {"$add": [{"$ref": "@:/x"}, {"$ref": "@:/x"}]}}],
+                },
+                {"$func": "f"},
+            ],
+            source={},
+            dest={},
+        )
+
+        assert result["doubled"] == 20
+
+    def test_context_copy_return_does_not_mutate_outer(self):
+        """'copy' context with return path: outer dest stays clean."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            [
+                {
+                    "$def": "compute",
+                    "context": "copy",
+                    "body": [{"/tmp": 7}, {"/answer": 42}],
+                    "return": "/answer",
+                },
+                {"/result": {"$func": "compute"}},
+            ],
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": 42}
+        assert "tmp" not in result
+        assert "answer" not in result
+
+    def test_context_invalid_value_falls_back_to_copy(self):
+        """Unknown context value falls through to the else branch (copy)."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            [
+                {"$def": "f", "context": "bogus", "body": [{"/leak": 1}]},
+                {"/result": {"$func": "f"}},
+            ],
+            source={},
+            dest={},
+        )
+
+        # "bogus" hits the else branch = deepcopy_dest, so no bleed into caller
+        assert "leak" not in result
+        assert "result" in result

@@ -76,7 +76,7 @@ class TestTryHandler:
                     {"$raise": "Custom error message"},
                 ],
                 "except": [
-                    {"/error_message": "${_:/_error_message}"},
+                    {"/error_message": "${&:/_error_message}"},
                 ],
             },
             source={},
@@ -376,7 +376,7 @@ class TestTryHandler:
                 ],
                 "except": [
                     {"/valid": False},
-                    {"/error_msg": "${_:/_error_message}"},
+                    {"/error_msg": "${&:/_error_message}"},
                 ],
             },
             source={"user_input": "-5"},

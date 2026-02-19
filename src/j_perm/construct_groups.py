@@ -29,6 +29,7 @@ from .handlers.constructs import (
     and_handler, or_handler, not_handler,
     # Comparison
     gt_handler, gte_handler, lt_handler, lte_handler, eq_handler, ne_handler, in_handler,
+    exists_handler,
     # Math
     add_handler, sub_handler, mul_handler, div_handler, pow_handler, mod_handler,
     # String
@@ -73,6 +74,7 @@ COMPARISON_HANDLERS = {
     "$eq": eq_handler,
     "$ne": ne_handler,
     "$in": in_handler,
+    "$exists": exists_handler,
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

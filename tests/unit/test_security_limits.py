@@ -564,7 +564,7 @@ class TestLoopSecurityLimits:
         engine = build_default_engine(max_foreach_items=100)
 
         result = engine.apply(
-            {"op": "foreach", "in": "/items", "as": "num", "do": [{"/result/-": "${num}"}]},
+            {"op": "foreach", "in": "/items", "as": "num", "do": [{"/result/-": "${&:num}"}]},
             source={"items": [1, 2, 3]},
             dest={},
         )
@@ -762,10 +762,10 @@ class TestFunctionRecursionLimits:
                     "body": [
                         {
                             "op": "if",
-                            "cond": {"$gt": [{"$ref": "/n"}, 0]},
+                            "cond": {"$gt": [{"$ref": "&:/n"}, 0]},
                             "then": [
                                 {"op": "set", "path": "/counter", "value": {"$add": [{"$ref": "@:/counter"}, 1]}},
-                                {"$func": "countdown", "args": [{"$sub": [{"$ref": "/n"}, 1]}]},
+                                {"$func": "countdown", "args": [{"$sub": [{"$ref": "&:/n"}, 1]}]},
                             ],
                         },
                     ],
@@ -792,10 +792,10 @@ class TestFunctionRecursionLimits:
                         "body": [
                             {
                                 "op": "if",
-                                "cond": {"$gt": [{"$ref": "/n"}, 0]},
+                                "cond": {"$gt": [{"$ref": "&:/n"}, 0]},
                                 "then": [
                                     {"op": "set", "path": "/counter", "value": {"$add": [{"$ref": "@:/counter"}, 1]}},
-                                    {"$func": "countdown", "args": [{"$sub": [{"$ref": "/n"}, 1]}]},
+                                    {"$func": "countdown", "args": [{"$sub": [{"$ref": "&:/n"}, 1]}]},
                                 ],
                             },
                         ],

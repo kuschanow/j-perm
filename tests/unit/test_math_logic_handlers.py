@@ -556,3 +556,145 @@ class TestMathOperators:
                 source={},
                 dest={},
             )
+
+
+class TestExistsConstruct:
+    """Test $exists construct — checks if a path resolves without error."""
+
+    def test_exists_present_source(self):
+        """$exists returns True for a path that exists in source."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/ok": {"$exists": "/user/name"}},
+            source={"user": {"name": "Alice"}},
+            dest={},
+        )
+
+        assert result == {"ok": True}
+
+    def test_exists_missing_source(self):
+        """$exists returns False for a path that is absent in source."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/ok": {"$exists": "/user/age"}},
+            source={"user": {"name": "Alice"}},
+            dest={},
+        )
+
+        assert result == {"ok": False}
+
+    def test_exists_dest_prefix(self):
+        """$exists with @: prefix checks dest."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            [
+                {"/counter": 0},
+                {"/has_counter": {"$exists": "@:/counter"}},
+                {"/no_field": {"$exists": "@:/missing"}},
+            ],
+            source={},
+            dest={},
+        )
+
+        assert result["has_counter"] is True
+        assert result["no_field"] is False
+
+    def test_exists_temp_read_only_prefix(self):
+        """$exists with &: prefix checks temp_read_only (function args)."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            [
+                {
+                    "$def": "check",
+                    "params": ["x"],
+                    "body": [{"/found": {"$exists": "&:/x"}}],
+                    "return": "/found",
+                },
+                {"/result": {"$func": "check", "args": [42]}},
+            ],
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": True}
+
+    def test_exists_nested_path(self):
+        """$exists works for deeply nested paths."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            [
+                {"/deep": {"$exists": "/a/b/c"}},
+                {"/shallow": {"$exists": "/a/b"}},
+                {"/top": {"$exists": "/a"}},
+                {"/none": {"$exists": "/z"}},
+            ],
+            source={"a": {"b": {"c": 1}}},
+            dest={},
+        )
+
+        assert result["deep"] is True
+        assert result["shallow"] is True
+        assert result["top"] is True
+        assert result["none"] is False
+
+    def test_exists_in_condition(self):
+        """$exists can be used as a condition in if."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {
+                "op": "if",
+                "cond": {"$exists": "/optional"},
+                "then": [{"/status": "has_optional"}],
+                "else": [{"/status": "no_optional"}],
+            },
+            source={"optional": "present"},
+            dest={},
+        )
+
+        assert result == {"status": "has_optional"}
+
+    def test_exists_in_condition_false(self):
+        """$exists condition evaluates False when path is missing."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {
+                "op": "if",
+                "cond": {"$exists": "/optional"},
+                "then": [{"/status": "has_optional"}],
+                "else": [{"/status": "no_optional"}],
+            },
+            source={},
+            dest={},
+        )
+
+        assert result == {"status": "no_optional"}
+
+    def test_exists_with_template_path(self):
+        """$exists path can be a template expression."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/ok": {"$exists": "/user/${/field}"}},
+            source={"user": {"name": "Alice"}, "field": "name"},
+            dest={},
+        )
+
+        assert result == {"ok": True}
+
+    def test_exists_invalid_arg_raises(self):
+        """$exists raises error when argument is not a string."""
+        engine = build_default_engine()
+
+        with pytest.raises(Exception):
+            engine.apply(
+                {"/ok": {"$exists": 42}},
+                source={},
+                dest={},
+            )

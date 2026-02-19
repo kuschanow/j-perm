@@ -54,29 +54,37 @@ class ExecutionContext:
     """Shared mutable state threaded through an entire ``apply`` call.
 
     Attributes:
-        source:   Read-only input document (normalized at Engine.apply time).
-        dest:     The document being built; mutated by each handler in sequence.
-        engine:   Back-reference to the owning Engine (gives access to
-                  ``process_value``, ``run_pipeline``, ``engine.resolver``,
-                  ``engine.processor``, etc.).
+        source: Read-only input document (normalized at Engine.apply time).
+        dest: The document being built; mutated by each handler in sequence.
+        engine: Back-reference to the owning Engine (gives access to
+                ``process_value``, ``run_pipeline``, ``engine.resolver``,
+                ``engine.processor``, etc.).
         metadata: Arbitrary dict for passing side-channel data between
                   stages/middlewares/handlers within one ``apply`` call.
+        temp_read_only: Arbitrary dict for sharing data that must not be mutated by handlers. Useful for things like function arguments.
+        temp: Arbitrary dict for sharing data that may be mutated by handlers, but should not appear in the final output.
     """
 
     source: Any
     dest: Any
     engine: 'Engine'
     metadata: dict[str, Any] = field(default_factory=dict)
+    temp_read_only: dict[str, Any] = field(default_factory=dict)
+    temp: dict[str, Any] = field(default_factory=dict)
 
     def copy(
             self,
-            deepcopy_source: bool = False,
             new_source: Any = None,
-            deepcopy_dest: bool = False,
             new_dest: Any = None,
-            new_engine: Optional['Engine'] = None,
-            deepcopy_metadata: bool = False,
             new_metadata: Optional[dict[str, Any]] = None,
+            new_temp_read_only: Optional[dict[str, Any]] = None,
+            new_temp: Optional[dict[str, Any]] = None,
+            new_engine: Optional['Engine'] = None,
+            deepcopy_source: bool = False,
+            deepcopy_dest: bool = False,
+            deepcopy_metadata: bool = False,
+            deepcopy_temp_read_only: bool = False,
+            deepcopy_temp: bool = False,
     ) -> ExecutionContext:
         """Return a copy of this context with optional overrides.
 
@@ -88,6 +96,8 @@ class ExecutionContext:
             dest=new_dest if new_dest is not None else (copy.deepcopy(self.dest) if deepcopy_dest else self.dest),
             engine=new_engine if new_engine is not None else self.engine,
             metadata=new_metadata if new_metadata is not None else (copy.deepcopy(self.metadata) if deepcopy_metadata else self.metadata),
+            temp_read_only=new_temp_read_only if new_temp_read_only is not None else (copy.deepcopy(self.temp_read_only) if deepcopy_temp_read_only else self.temp_read_only),
+            temp=new_temp if new_temp is not None else (copy.deepcopy(self.temp) if deepcopy_temp else self.temp),
         )
 
 
@@ -165,7 +175,6 @@ class ValueProcessor(ABC):
         """
         processed_path, data_source = self.resolve(pointer, ctx)
         return ctx.engine.resolver.exists(processed_path, data_source)
-
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -844,11 +853,9 @@ class Engine:
             # Save real dest in metadata for JMESPath access
             # Preserve existing _real_dest if we're in a nested process_value call
             metadata_with_dest = {**ctx.metadata, '_real_dest': ctx.metadata.get('_real_dest', ctx.dest)}
-            value_ctx = ExecutionContext(
-                source=ctx.source,
-                dest=current,
-                engine=self,
-                metadata=metadata_with_dest,
+            value_ctx = ctx.copy(
+                new_dest=current,
+                new_metadata=metadata_with_dest,
             )
             self.value_pipeline.run([current], value_ctx)
             if value_ctx.dest == current:

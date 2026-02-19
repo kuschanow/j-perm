@@ -3,7 +3,7 @@
 A composable JSON transformation DSL with a powerful, extensible architecture.
 
 J-Perm lets you describe data transformations as **executable specifications** — a list of steps that can be applied to input documents. It supports
-JSON Pointer addressing with slicing (arrays and strings), template interpolation with `${...}` syntax, special constructs (`$ref`, `$eval`, `$cast`), logical and comparison operators (`$and`, `$or`, `$not`), comparison operators (6 operators), mathematical operations (6 operators), membership testing (`$in`), comprehensive string manipulation (11 operations), regular expressions (5 operations), user-defined functions (`$def`, `$func`, `$raise`), error handling (`try-except-finally`), and a rich set of built-in operations — all with configurable security limits to prevent DoS attacks.
+JSON Pointer addressing with slicing (arrays and strings), template interpolation with `${...}` syntax, special constructs (`$ref`, `$eval`, `$cast`), logical and comparison operators (`$and`, `$or`, `$not`), comparison operators (6 operators plus `$in` and `$exists`), mathematical operations (6 operators), comprehensive string manipulation (11 operations), regular expressions (5 operations), user-defined functions (`$def`, `$func`, `$raise`), error handling (`try-except-finally`), and a rich set of built-in operations — all with configurable security limits to prevent DoS attacks.
 
 ---
 
@@ -22,22 +22,20 @@ source = {
     ]
 }
 
-# Transformation spec (using shorthands)
+# Transformation spec using foreach and the &: prefix for the loop variable
 spec = {
     "op": "foreach",
     "in": "/users",
+    "as": "item",
     "do": {
-        "/adults[]": {
-            "$eval": [
-                {"/name": "/item/name", "/age": "${int:/item/age}"},
-                {"op": "if", "path": "/age", "cond": "${?dest.age >= `18`}", "else": {"~delete": "/age"}}
-            ]
-        }
-    }
+        "op": "if",
+        "cond": "${?args.item.age >= `18`}",
+        "then": {"/adults[]": "&:/item"},
+    },
 }
 
 result = engine.apply(spec, source=source, dest={})
-# → {"adults": [{"name": "Bob", "age": 22}]}
+# → {"adults": [{"name": "Bob", "age": "22"}]}
 ```
 
 ---
@@ -168,11 +166,11 @@ engine = build_default_engine(max_function_recursion_depth=50)
 # This will raise RuntimeError if recursion exceeds 50 levels
 spec = [
     {"$def": "factorial", "params": ["n"], "body": [
-        {"op": "if", "cond": {"$eq": [{"$ref": "/n"}, 0]},
+        {"op": "if", "cond": {"$eq": [{"$ref": "&:/n"}, 0]},
          "then": [{"/result": 1}],
          "else": [{"/result": {"$mul": [
-             {"$ref": "/n"},
-             {"$func": "factorial", "args": [{"$sub": [{"$ref": "/n"}, 1]}]}
+             {"$ref": "&:/n"},
+             {"$func": "factorial", "args": [{"$sub": [{"$ref": "&:/n"}, 1]}]}
          ]}}]}
     ], "return": "/result"},
     {"/output": {"$func": "factorial", "args": [100]}}  # Too deep!
@@ -365,11 +363,17 @@ J-Perm supports **prefixes** to specify which context to read from:
 
 | Prefix | Source | Description |
 |--------|--------|-------------|
-| `/path` | **source** | Default - read from source context |
-| `@:/path` | **dest** | Read from destination being built |
-| `_:/path` | **metadata** | Read from execution metadata |
+| `/path` or `_:/path` | **source** | Read from the immutable source document |
+| `@:/path` | **dest** | Read from the destination being built |
+| `&:/path` | **args** | Read from `temp_read_only` — function arguments, loop variables, error info |
+| `!:/path` | **temp** | Read from `temp` — mutable scratch space, not in final output |
 
-**Example: Accessing destination in templates**
+The `&:` prefix is the standard way to access:
+- **Function parameters** inside `$def` bodies
+- **Loop variables** inside `foreach` `do` blocks
+- **Error info** (`_error_message`, `_error_type`) inside `try` `except` blocks
+
+**Example: Accessing dest in templates**
 
 ```python
 # Build incrementally, referencing previous values
@@ -382,35 +386,35 @@ result = engine.apply(spec, source={}, dest={})
 # → {"name": "Alice", "greeting": "Hello, Alice!"}
 ```
 
-**Example: Comparing source vs dest**
+**Example: Function parameters via &:**
 
 ```python
 spec = [
-    {"/dest_value": "from_dest"},
-    {"/comparison": "Source: ${/source_value}, Dest: ${@:/dest_value}"}
+    {
+        "$def": "greet",
+        "params": ["name"],
+        "body": [{"/msg": "Hello, ${&:/name}!"}],
+        "return": "/msg",
+    },
+    {"/result": {"$func": "greet", "args": ["World"]}},
 ]
 
-result = engine.apply(
-    spec,
-    source={"source_value": "from_source"},
-    dest={}
-)
-# → {"dest_value": "from_dest", "comparison": "Source: from_source, Dest: from_dest"}
+result = engine.apply(spec, source={}, dest={})
+# → {"result": "Hello, World!"}
 ```
 
-**Example: Using in conditionals**
+**Example: Loop variable via &:**
 
 ```python
-# Check destination state in conditions
-spec = [
-    {"/status": "ready"},
-    {
-        "op": "if",
-        "path": "@:/status",
-        "equals": "ready",
-        "then": [{"/message": "System is ready"}]
-    }
-]
+spec = {
+    "op": "foreach",
+    "in": "/items",
+    "as": "item",
+    "do": {"/out[]": "&:/item"},
+}
+
+result = engine.apply(spec, source={"items": [1, 2, 3]}, dest={})
+# → {"out": [1, 2, 3]}
 ```
 
 ---
@@ -422,7 +426,11 @@ Templates are resolved by `TemplSubstHandler` in the value pipeline.
 #### JSON Pointer lookup
 
 ```python
-"${/user/name}"  # → Resolve pointer from source
+"${/user/name}"     # → Resolve pointer from source
+"${@:/total}"       # → Read from dest
+"${&:/param_name}"  # → Read function argument / loop variable
+"${!:/scratch}"     # → Read from temp scratch space
+"${_:/user/name}"   # → Same as ${/user/name} (source alias)
 ```
 
 #### Type casters (built-in)
@@ -442,13 +450,20 @@ Templates are resolved by `TemplSubstHandler` in the value pipeline.
 "${?source.items[?price > `10`].name}"  # → Query source with JMESPath
 "${?dest.total}"                         # → Query destination
 "${?add(dest.x, source.y)}"              # → Mix source and dest
+"${?args.item.age >= `18`}"              # → Query function arg / loop variable
+"${?temp.scratch}"                       # → Query temp scratch space
 ```
 
 **Built-in JMESPath functions:** `add(a, b)`, `subtract(a, b)`
 
-**Data structure:** JMESPath expressions use explicit namespaces:
-- `source.*` – access source document
-- `dest.*` – access destination document
+**JMESPath data namespaces:**
+
+| Namespace | Context field | Description |
+|-----------|---------------|-------------|
+| `source.*` | `ctx.source` | Source document |
+| `dest.*` | `ctx.dest` | Destination being built |
+| `args.*` | `ctx.temp_read_only` | Function args, loop vars, error info |
+| `temp.*` | `ctx.temp` | Mutable scratch space |
 
 #### Nested templates
 
@@ -478,7 +493,7 @@ Special values are resolved by `SpecialResolveHandler`.
 }
 ```
 
-- Resolves pointer from **source** context
+- Resolves pointer from **source** context (supports all prefixes: `@:`, `&:`, `!:`, `_:`)
 - Returns deep copy (no aliasing)
 - Supports `$default` fallback
 
@@ -698,6 +713,46 @@ result = engine.apply(spec, source={}, dest={})
 - Values are processed through `process_value` (support templates, `$ref`, `$cast`, etc.)
 - Can be nested and combined with logical operators
 
+#### Membership and Existence Operators
+
+**`$in` — Python-style membership test**
+
+Works with strings (substring), lists (element), and dicts (key):
+
+```json
+{"$in": ["world", "hello world"]}  → true (substring)
+{"$in": [2, [1, 2, 3]]}             → true (element in list)
+{"$in": ["key", {"key": "val"}]}    → true (key in dict)
+```
+
+**`$exists` — Check if a path resolves**
+
+Returns `true` if the pointer can be resolved without error, `false` otherwise.
+Supports all context prefixes (`@:`, `&:`, `!:`, `_:`, or plain `/`).
+
+```json
+{"$exists": "/user/name"}    → true if source has user.name
+{"$exists": "@:/result"}     → true if dest has /result
+{"$exists": "&:/param"}      → true if arg named 'param' was passed to the function
+```
+
+**Example — conditional processing:**
+
+```python
+spec = {
+    "op": "if",
+    "cond": {"$exists": "/optional_field"},
+    "then": [{"/result": "${/optional_field}"}],
+    "else": [{"/result": "default"}],
+}
+```
+
+**Example — template path:**
+
+```python
+{"/ok": {"$exists": "/user/${/field_name}"}}
+```
+
 #### Mathematical Operators
 
 J-Perm provides mathematical operators with support for 1+ operands:
@@ -780,18 +835,6 @@ spec = {
 - Values are processed through `process_value` (support templates, `$ref`, `$cast`, etc.)
 - Can be nested to create complex expressions
 - Work seamlessly with comparison operators in conditions
-
-#### Membership Test Operator
-
-**`$in` — Python-style membership test**
-
-Works with strings (substring), lists (element), and dicts (key):
-
-```json
-{"$in": ["world", "hello world"]}  → true (substring)
-{"$in": [2, [1, 2, 3]]}             → true (element in list)
-{"$in": ["key", {"key": "val"}]}    → true (key in dict)
-```
 
 ---
 
@@ -932,58 +975,93 @@ J-Perm supports defining reusable functions and controlled error handling.
     "$def": "myFunction",
     "params": ["arg1", "arg2"],
     "body": [
-        {"/result": "${arg1}"},
-        {"/total": "${int:${arg2}}"}
+        {"/result": "${&:/arg1}"},
+        {"/total": "${int:${&:/arg2}}"}
     ],
     "return": "/total",
+    "context": "copy",
     "on_failure": [
         {"/error": "Function failed"}
     ]
 }
 ```
 
-- `params` — list of parameter names (optional, default: [])
+- `params` — list of parameter names (optional, default: `[]`)
 - `body` — actions to execute when function is called
 - `return` — path in local context to return (optional, default: entire dest)
+- `context` — how the function's dest is initialized (see below)
 - `on_failure` — error handler actions (optional)
 
-**Special variable `_`:** Inside function body, the original source is accessible via `/_/path`:
+**Accessing parameters:**
 
-```json
-{
-    "$def": "getFromSource",
-    "body": [{"/value": {"$ref": "/_/data"}}]
-}
-```
-
-When called, functions can access:
-- **Parameters** via `/${param_name}`
-- **Original source** via `/_/path` (source from engine.apply)
-- **Current dest** via `@:/path`
-
-Example:
+Inside the function body, parameters are available via the `&:` prefix:
 
 ```python
 spec = [
     {
-        "$def": "combineData",
-        "params": ["userInput"],
-        "body": [
-            {"/input": "${userInput}"},
-            {"/global": {"$ref": "/_/config"}},  # From original source
-            {"/result": "Input: ${@:/input}, Config: ${@:/global/setting}"}
-        ],
-        "return": "/result"
+        "$def": "greet",
+        "params": ["name"],
+        "body": [{"/msg": "Hello, ${&:/name}!"}],
+        "return": "/msg",
     },
-    {"/output": {"$func": "combineData", "args": ["test"]}}
+    {"/result": {"$func": "greet", "args": ["World"]}},
+]
+# → {"result": "Hello, World!"}
+```
+
+**Accessing original source:**
+
+The original source document is always accessible via the plain `/` pointer (or `_:` alias):
+
+```python
+spec = [
+    {
+        "$def": "getConfig",
+        "body": [{"/cfg": {"$ref": "/config/key"}}],
+        "return": "/cfg",
+    },
+    {"/result": {"$func": "getConfig"}},
 ]
 
-result = engine.apply(
-    spec,
-    source={"config": {"setting": "production"}},
-    dest={}
-)
-# → {"output": "Input: test, Config: production"}
+result = engine.apply(spec, source={"config": {"key": "production"}}, dest={})
+# → {"result": "production"}
+```
+
+**`context` parameter — dest initialization mode:**
+
+| Value | Behavior |
+|-------|----------|
+| `"copy"` (default) | Function body operates on a **deep copy** of the caller's `dest`. Mutations stay local. |
+| `"new"` | Function body starts with an **empty** `dest = {}`. Cannot see the caller's dest. |
+| `"shared"` | Function body operates on the **same** dest object as the caller. Mutations are visible to the caller. |
+
+```python
+# context: "copy" (default) — isolated
+spec = [
+    {"$def": "f", "body": [{"/internal": 99}]},
+    {"/result": {"$func": "f"}},
+]
+# "internal" does NOT appear at the top level of the outer dest
+
+# context: "new" — fresh slate
+spec = [
+    {"/outer": "hello"},
+    {
+        "$def": "f",
+        "context": "new",
+        "body": [{"/saw_outer": {"$exists": "@:/outer"}}],
+        "return": "/saw_outer",
+    },
+    {"/result": {"$func": "f"}},
+]
+# → {"outer": "hello", "result": false}  (function can't see /outer)
+
+# context: "shared" — direct mutation
+spec = [
+    {"$def": "f", "context": "shared", "body": [{"/shared_key": True}]},
+    {"$func": "f"},
+]
+# → {"shared_key": true}  (mutation visible in outer dest)
 ```
 
 #### `$func` — Call a function
@@ -995,7 +1073,7 @@ result = engine.apply(
 }
 ```
 
-- `args` — list of arguments to pass (optional, default: [])
+- `args` — list of arguments to pass (optional, default: `[]`)
 
 Functions are stored in the execution context metadata and can be called multiple times within the same transformation.
 
@@ -1014,26 +1092,21 @@ Raises a `JPermError` with the specified message. The error can be:
 
 **Example with error handling:**
 
-```json
-[
+```python
+spec = [
     {
         "$def": "validateAge",
         "params": ["age"],
         "body": [
             {
                 "op": "if",
-                "cond": {"$not": [{"op": "assert", "value": "${int:${age}}", "return": true}]},
-                "then": [{"$raise": "Age must be a number"}]
-            },
-            {
-                "op": "if",
-                "cond": "${?source.age < `0`}",
+                "cond": {"$lt": [{"$ref": "&:/age"}, 0]},
                 "then": [{"$raise": "Age cannot be negative"}]
-            }
+            },
+            {"/valid": True}
         ],
-        "on_failure": [
-            {"/validation_error": "@:/"}
-        ]
+        "return": "/valid",
+        "on_failure": [{"/validation_failed": True}]
     },
     {"/result": {"$func": "validateAge", "args": [25]}}
 ]
@@ -1119,10 +1192,10 @@ Expands to:
 
 #### Pointer assignment
 
+When the value starts with `/`, `@:`, `&:`, `!:`, or `_:`, it is treated as a **copy-from pointer** and expands to an `op: copy` step:
+
 ```json
-{
-    "/name": "/user/fullName"
-}
+{"/name": "/user/fullName"}
 ```
 
 Expands to:
@@ -1134,6 +1207,13 @@ Expands to:
     "path": "/name",
     "ignore_missing": true
 }
+```
+
+This also works with context prefixes:
+
+```json
+{"/copy_of": "@:/existing_dest_key"}
+{"/arg_val": "&:/param_name"}
 ```
 
 #### Literal assignment
@@ -1198,6 +1278,8 @@ Copy value from source to destination.
 }
 ```
 
+The `from` pointer supports all context prefixes (`@:`, `&:`, `!:`, `_:`).
+
 ---
 
 ### `delete`
@@ -1238,15 +1320,17 @@ Iterate over array/mapping.
 
 **Note:** If source is a dict, iterates over `(key, value)` tuples.
 
-**Special variable `_`:** Inside foreach body, you can access:
-- **Current item** via `/${var}` (e.g., `/item`)
-- **Original source** via `/_/path` (source from engine.apply)
-- **Current dest** via `@:/path`
+**Accessing the loop variable:**
 
-Example:
+The loop variable is stored in `temp_read_only` and is accessible inside `do` blocks via:
+- `&:/item` — pointer syntax
+- `${&:/item}` — template syntax
+- `{"$ref": "&:/item"}` — $ref syntax
+- `${?args.item}` — JMESPath syntax
+
+**The original source** is accessible via the plain `/` pointer as usual.
 
 ```python
-# Enrich items with global config from source
 spec = {
     "op": "foreach",
     "in": "/products",
@@ -1254,10 +1338,9 @@ spec = {
     "do": {
         "/results[]": {
             "$eval": [
-                {"/name": "${product/name}"},
-                {"/price": "${product/price}"},
-                {"/tax_rate": {"$ref": "/_/config/tax"}},  # From original source
-                {"/total": "${?source.price * source.tax_rate}"}
+                {"/name": "${&:/product/name}"},
+                {"/price": "${&:/product/price}"},
+                {"/tax": {"$ref": "/config/tax"}},  # from original source
             ]
         }
     }
@@ -1266,12 +1349,12 @@ spec = {
 result = engine.apply(
     spec,
     source={
-        "products": [{"name": "A", "price": 100}, {"name": "B", "price": 200}],
+        "products": [{"name": "A", "price": 100}],
         "config": {"tax": 1.2}
     },
     dest={}
 )
-# → {"results": [{"name": "A", "price": 100, "tax_rate": 1.2, "total": 120}, ...]}
+# → {"results": [{"name": "A", "price": 100, "tax": 1.2}]}
 ```
 
 ---
@@ -1479,6 +1562,8 @@ Execute actions with error handling (try-except-finally pattern).
 
 **Access error information:**
 
+Inside the `except` block, error info is available via the `&:` prefix:
+
 ```json
 {
     "op": "try",
@@ -1486,8 +1571,8 @@ Execute actions with error handling (try-except-finally pattern).
         {"$raise": "Something went wrong"}
     ],
     "except": [
-        {"/error_message": "${_:/_error_message}"},
-        {"/error_type": "${_:/_error_type}"}
+        {"/error_message": "${&:/_error_message}"},
+        {"/error_type": "${&:/_error_type}"}
     ]
 }
 ```
@@ -1503,7 +1588,7 @@ Execute actions with error handling (try-except-finally pattern).
     ],
     "except": [
         {"/status": "error"},
-        {"/error_msg": "${_:/_error_message}"}
+        {"/error_msg": "${&:/_error_message}"}
     ],
     "finally": [
         {"/processed_at": "2024-01-01"},
@@ -1515,15 +1600,14 @@ Execute actions with error handling (try-except-finally pattern).
 **Behavior:**
 - Executes actions in `do` block
 - If error occurs:
-  - Error info stored in metadata (`_error_type`, `_error_message`)
-  - If `except` block provided, executes it with error info accessible via `_:/` prefix
+  - Error info stored in `temp_read_only` (`_error_type`, `_error_message`)
+  - If `except` block provided, executes it with error info accessible via `&:/` prefix
   - If no `except`, re-raises error after executing `finally` (if present)
 - `finally` block always executes (even on error)
-- Except block sees dest state at time of error
 
-**Metadata during except:**
-- `_:/_error_type` — error class name (e.g., "JPermError")
-- `_:/_error_message` — error message string
+**Error info in except:**
+- `&:/_error_type` — error class name (e.g., `"JPermError"`)
+- `&:/_error_message` — error message string
 
 **Example: Validation with fallback**
 
@@ -1541,7 +1625,7 @@ spec = {
     ],
     "except": [
         {"/valid": False},
-        {"/error": "${_:/_error_message}"}
+        {"/error": "${&:/_error_message}"}
     ]
 }
 
@@ -1665,7 +1749,7 @@ from j_perm import build_default_engine
 from j_perm import (
     CORE_HANDLERS,                # $ref, $eval
     LOGICAL_HANDLERS,             # $and, $or, $not
-    COMPARISON_HANDLERS,          # $gt, $gte, $lt, $lte, $eq, $ne, $in
+    COMPARISON_HANDLERS,          # $gt, $gte, $lt, $lte, $eq, $ne, $in, $exists
     MATH_HANDLERS,                # $add, $sub, $mul, $div, $pow, $mod (with default limits)
     STRING_HANDLERS,              # All string operations (11 constructs, with default limits)
     REGEX_HANDLERS,               # All regex operations (5 constructs, with default limits)
@@ -1695,6 +1779,7 @@ from j_perm import (
     str_join_handler,
     regex_match_handler,
     add_handler,
+    exists_handler,
     # ... etc
 )
 ```
@@ -1702,7 +1787,7 @@ from j_perm import (
 **Available groups:**
 - `CORE_HANDLERS` — Core constructs (`$ref`, `$eval`)
 - `LOGICAL_HANDLERS` — Logical operators (`$and`, `$or`, `$not`)
-- `COMPARISON_HANDLERS` — Comparison operators (`$gt`, `$gte`, `$lt`, `$lte`, `$eq`, `$ne`, `$in`)
+- `COMPARISON_HANDLERS` — Comparison operators (`$gt`, `$gte`, `$lt`, `$lte`, `$eq`, `$ne`, `$in`, `$exists`)
 - `MATH_HANDLERS` — Mathematical operators with default limits (`$add`, `$sub`, `$mul`, `$div`, `$pow`, `$mod`)
 - `STRING_HANDLERS` — String operations with default limits (11 constructs)
 - `REGEX_HANDLERS` — Regular expression operations with default limits (5 constructs)
@@ -2023,6 +2108,7 @@ from j_perm import (
     # Core infrastructure
     ExecutionContext,
     ValueResolver,
+    ValueProcessor,
     Engine,
     Pipeline,
 
@@ -2078,6 +2164,7 @@ from j_perm import (
     eq_handler,
     ne_handler,
     in_handler,
+    exists_handler,
 
     # Mathematical operators
     add_handler,
@@ -2155,6 +2242,9 @@ from j_perm import (
     # Resolver
     PointerResolver,
 
+    # Processor
+    PointerProcessor,
+
     # Casters
     BUILTIN_CASTERS,  # Built-in type casters (int, float, bool, str)
 
@@ -2173,16 +2263,17 @@ from j_perm import (
 
 ## Examples
 
-### Example 1: Data Filtering
+### Example 1: Data Filtering with foreach
 
 ```python
 spec = {
     "op": "foreach",
     "in": "/products",
+    "as": "item",
     "do": {
         "op": "if",
-        "cond": "${?source.item.price < `100`}",
-        "then": {"/affordable[]": "/item"}
+        "cond": "${?args.item.price < `100`}",
+        "then": {"/affordable[]": "&:/item"}
     }
 }
 ```
@@ -2222,44 +2313,64 @@ spec = [
 ]
 ```
 
-### Example 5: Functions with Error Handling
+### Example 5: Functions with Parameters and Error Handling
 
 ```python
 spec = [
-    # Define a validation function with error recovery
     {
         "$def": "validateAge",
         "params": ["age"],
         "body": [
-            # Validate age is a number
             {
                 "op": "if",
-                "cond": {"$not": [{"op": "assert", "value": "${int:${age}}", "return": True}]},
-                "then": [{"$raise": "Age must be a number"}]
-            },
-            # Validate age is positive
-            {
-                "op": "if",
-                "cond": "${?source.age < `0`}",
-                "then": [{"$raise": "Age cannot be negative: ${age}"}]
+                "cond": {"$lt": [{"$ref": "&:/age"}, 0]},
+                "then": [{"$raise": "Age cannot be negative: ${&:/age}"}]
             },
             {"/valid": True}
         ],
         "return": "/valid",
         "on_failure": [
-            # Capture the error in dest
             {"/validation_failed": True},
             {"/last_error": "Validation error occurred"}
         ]
     },
-    # Use function to validate user input
     {"/user_age_valid": {"$func": "validateAge", "args": [25]}},
-    # Access dest values with @: prefix
+]
+```
+
+### Example 6: try-except with Error Info
+
+```python
+spec = {
+    "op": "try",
+    "do": [
+        {"/age": {"$cast": {"value": "${/user_input}", "type": "int"}}},
+        {
+            "op": "if",
+            "cond": {"$lt": [{"$ref": "@:/age"}, 0]},
+            "then": [{"$raise": "Age cannot be negative"}]
+        },
+        {"/valid": True}
+    ],
+    "except": [
+        {"/valid": False},
+        {"/error": "${&:/_error_message}"}
+    ]
+}
+
+result = engine.apply(spec, source={"user_input": "-5"}, dest={})
+# → {"age": -5, "valid": False, "error": "Age cannot be negative"}
+```
+
+### Example 7: $exists for Optional Fields
+
+```python
+spec = [
     {
         "op": "if",
-        "path": "@:/validation_failed",
-        "equals": True,
-        "then": [{"/message": "Please check your input: ${@:/last_error}"}]
+        "cond": {"$exists": "/user/middle_name"},
+        "then": [{"/display": "${/user/first_name} ${/user/middle_name} ${/user/last_name}"}],
+        "else": [{"/display": "${/user/first_name} ${/user/last_name}"}],
     }
 ]
 ```
