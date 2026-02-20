@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import copy
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional, Tuple, Union
 
@@ -363,6 +364,51 @@ class AsyncMiddleware(ABC):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# PipelineSignal — extensible in-pipeline control flow
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class PipelineSignal(Exception):
+    """Base class for signals that ``Pipeline.run`` intercepts during execution.
+
+    ``Pipeline.run`` wraps each ``handler.execute(step, ctx)`` call in a
+    ``try/except PipelineSignal`` block and calls ``signal.handle(ctx)``.
+
+    * If ``handle`` returns normally, execution continues with the next step.
+    * If ``handle`` re-raises (or raises any exception), the signal propagates
+      up the call stack — allowing ``Engine.process_value`` (or any other
+      caller) to catch ``PipelineSignal`` and react accordingly.
+
+    This keeps ``core.py`` free from concrete signal knowledge: it only knows
+    the abstract contract.  Concrete signals (e.g. ``RawValueSignal``) live in
+    ``handlers/signals.py`` and self-describe their behaviour via ``handle``.
+
+    Example — a signal that stops value-pipeline stabilisation::
+
+        class RawValueSignal(PipelineSignal):
+            def __init__(self, value):
+                self.value = value
+            def handle(self, ctx):
+                ctx.dest = self.value
+                raise self          # propagate → process_value catches & breaks
+
+    Example — a signal that silently mutates ctx without propagating::
+
+        class SomeLocalSignal(PipelineSignal):
+            def handle(self, ctx):
+                ctx.dest = ...      # just update dest, no re-raise
+    """
+
+    def handle(self, ctx: 'ExecutionContext') -> None:
+        """React to the signal.  Override in subclasses.
+
+        *ctx* is the active ``ExecutionContext`` at the point the signal was
+        raised.  The default implementation is a no-op (signal is silently
+        swallowed by ``Pipeline.run``).
+        """
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Action system — tree-structured per-step dispatch
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -615,7 +661,10 @@ class Pipeline:
                         f"maximum allowed is {max_ops}"
                     )
 
-                ctx.dest = handler.execute(step, ctx)
+                try:
+                    ctx.dest = handler.execute(step, ctx)
+                except PipelineSignal as sig:
+                    sig.handle(ctx)
 
     # -- async execution ----------------------------------------------------
 
@@ -653,11 +702,14 @@ class Pipeline:
                         f"maximum allowed is {max_ops}"
                     )
 
-                # Check if handler is async
-                if isinstance(handler, AsyncActionHandler):
-                    ctx.dest = await handler.execute(step, ctx)
-                else:
-                    ctx.dest = handler.execute(step, ctx)
+                try:
+                    # Check if handler is async
+                    if isinstance(handler, AsyncActionHandler):
+                        ctx.dest = await handler.execute(step, ctx)
+                    else:
+                        ctx.dest = handler.execute(step, ctx)
+                except PipelineSignal as sig:
+                    sig.handle(ctx)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -857,7 +909,11 @@ class Engine:
                 new_dest=current,
                 new_metadata=metadata_with_dest,
             )
-            self.value_pipeline.run([current], value_ctx)
+            try:
+                self.value_pipeline.run([current], value_ctx)
+            except PipelineSignal:
+                current = value_ctx.dest
+                break
             if value_ctx.dest == current:
                 break
             current = value_ctx.dest
@@ -889,7 +945,11 @@ class Engine:
                 engine=self,
                 metadata=metadata_with_dest,
             )
-            await self.value_pipeline.run_async([current], value_ctx)
+            try:
+                await self.value_pipeline.run_async([current], value_ctx)
+            except PipelineSignal:
+                current = value_ctx.dest
+                break
             if value_ctx.dest == current:
                 break
             current = value_ctx.dest

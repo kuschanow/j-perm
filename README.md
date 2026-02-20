@@ -3,7 +3,7 @@
 A composable JSON transformation DSL with a powerful, extensible architecture.
 
 J-Perm lets you describe data transformations as **executable specifications** — a list of steps that can be applied to input documents. It supports
-JSON Pointer addressing with slicing (arrays and strings), template interpolation with `${...}` syntax, special constructs (`$ref`, `$eval`, `$cast`), logical and comparison operators (`$and`, `$or`, `$not`), comparison operators (6 operators plus `$in` and `$exists`), mathematical operations (6 operators), comprehensive string manipulation (11 operations), regular expressions (5 operations), user-defined functions (`$def`, `$func`, `$raise`) with loop/function control flow (`$break`, `$continue`, `$return`), error handling (`try-except-finally`), and a rich set of built-in operations — all with configurable security limits to prevent DoS attacks.
+JSON Pointer addressing with slicing (arrays and strings), template interpolation with `${...}` syntax, special constructs (`$ref`, `$eval`, `$cast`, `$raw`), logical and comparison operators (`$and`, `$or`, `$not`), comparison operators (6 operators plus `$in` and `$exists`), mathematical operations (6 operators), comprehensive string manipulation (11 operations), regular expressions (5 operations), user-defined functions (`$def`, `$func`, `$raise`) with loop/function control flow (`$break`, `$continue`, `$return`), error handling (`try-except-finally`), and a rich set of built-in operations — all with configurable security limits to prevent DoS attacks.
 
 ---
 
@@ -558,6 +558,58 @@ engine = build_default_engine(casters={"upper": custom_upper})
 
 # Use in spec
 {"/name": {"$cast": {"value": "alice", "type": "upper"}}}  # → "ALICE"
+```
+
+#### `$raw` — Return a literal without processing
+
+`$raw` has two forms:
+
+**Wrapper construct** — returns the value as-is, preventing all value-pipeline evaluation:
+
+```json
+{"$raw": {"$ref": "/not/evaluated"}}
+{"$raw": "hello ${not_substituted}"}
+{"$raw": [{"$ref": "/a"}, {"$ref": "/b"}]}
+```
+
+The wrapped value is never passed through template substitution, `$ref` resolution, or any other pipeline stage. Use this to store construct-shaped data as a literal.
+
+**Flag on any construct** — add `"$raw": true` to stop the stabilisation loop after the construct resolves:
+
+```json
+{"$ref": "/path", "$raw": true}
+{"$func": "myFunc", "$raw": true}
+{"$add": [1, 2], "$raw": true}
+```
+
+Without the flag, `process_value` keeps iterating until the result stabilises — so if `$ref` returns a value that itself contains a `$ref`, that too will be resolved. With `"$raw": true`, the loop stops after the first resolution and returns the result as-is.
+
+**Example — preventing chain resolution:**
+
+```python
+# source["/a"] contains another construct
+source = {"a": {"$ref": "/b"}, "b": "final"}
+
+# Without $raw: True — both hops resolved
+spec = {"/result": {"$ref": "/a"}}
+# → {"result": "final"}
+
+# With $raw: True — only first hop resolved
+spec = {"/result": {"$ref": "/a", "$raw": True}}
+# → {"result": {"$ref": "/b"}}
+```
+
+**Example — storing a construct as a literal:**
+
+```python
+spec = [
+    # Store a construct literally (not evaluated)
+    {"/template": {"$raw": {"$ref": "/data"}}},
+    # Later retrieve it — still unevaluated
+    {"/copy": {"$ref": "@:/template", "$raw": True}},
+]
+result = engine.apply(spec, source={"data": "value"}, dest={})
+# → {"template": {"$ref": "/data"}, "copy": {"$ref": "/data"}}
 ```
 
 #### `$and` — Logical AND with short-circuit
@@ -2199,6 +2251,40 @@ This resolves nested templates and special constructs:
 # Pass 3: "final" → "final" (stable ✓)
 ```
 
+To stop the loop early and return the current result as-is, use the `$raw: true` flag or the `$raw` wrapper construct (see [`$raw`](#raw--return-a-literal-without-processing)).
+
+### PipelineSignal — extensible in-pipeline control flow
+
+`PipelineSignal` is an abstract base class (defined in `core.py`) for signals that `Pipeline.run` intercepts. When a handler raises a `PipelineSignal`, `Pipeline.run` calls `signal.handle(ctx)`. If `handle` re-raises, the signal propagates up to the caller (e.g. `Engine.process_value`).
+
+This lets you add new pipeline-level behaviours without touching `core.py`:
+
+```python
+from j_perm import PipelineSignal
+
+class MySignal(PipelineSignal):
+    def __init__(self, value):
+        self.value = value
+
+    def handle(self, ctx):
+        ctx.dest = self.value
+        raise self  # propagate to stop the stabilisation loop
+```
+
+Built-in signals that inherit from `PipelineSignal`:
+
+| Signal | Raised by | Caught by |
+|--------|-----------|-----------|
+| `RawValueSignal` | `raw_handler`, `SpecialResolveHandler` (flag) | `Engine.process_value` |
+
+Signals that do **not** inherit from `PipelineSignal` (local control flow):
+
+| Signal | Raised by | Caught by |
+|--------|-----------|-----------|
+| `BreakSignal` | `$break` | `foreach` / `while` handler |
+| `ContinueSignal` | `$continue` | `foreach` / `while` handler |
+| `ReturnSignal` | `$return` | `$func` call handler |
+
 ---
 
 ### Hierarchical Registries
@@ -2285,6 +2371,9 @@ from j_perm import (
     Middleware,
     AsyncMiddleware,  # Async version
 
+    # Pipeline control flow (base class for extensible signals)
+    PipelineSignal,
+
     # Unescape
     UnescapeRule,
 )
@@ -2304,6 +2393,7 @@ from j_perm import (
     IdentityHandler,
 
     # Special construct functions
+    raw_handler,        # $raw wrapper / literal escape
     ref_handler,
     eval_handler,
     make_cast_handler,  # Factory for $cast handler
@@ -2380,9 +2470,10 @@ from j_perm import (
     ContinueHandler,
 
     # Control flow signals (exceptions)
-    BreakSignal,    # raised by $break
-    ContinueSignal, # raised by $continue
-    ReturnSignal,   # raised by $return (.value holds the return value)
+    BreakSignal,       # raised by $break
+    ContinueSignal,    # raised by $continue
+    ReturnSignal,      # raised by $return (.value holds the return value)
+    RawValueSignal,    # raised by $raw / $raw:True flag (.value = raw result)
 
     # Operation handlers
     SetHandler,

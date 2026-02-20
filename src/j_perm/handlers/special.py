@@ -66,5 +66,9 @@ class SpecialResolveHandler(ActionHandler):
     def execute(self, step: Any, ctx: ExecutionContext) -> Any:
         for key, fn in self._specials.items():
             if key in step:
-                return fn(step, ctx)
+                result = fn(step, ctx)
+                if step.get("$raw") is True:
+                    from .signals import RawValueSignal
+                    raise RawValueSignal(result)
+                return result
         return step

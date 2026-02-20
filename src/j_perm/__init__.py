@@ -33,6 +33,7 @@ from .core import (
     ActionNode,
     ActionTypeRegistry,
     Pipeline,
+    PipelineSignal,
     Engine,
     UnescapeRule
 )
@@ -57,7 +58,9 @@ from .handlers import (
     BreakSignal,
     ContinueSignal,
     ReturnSignal,
+    RawValueSignal,
     # constructs
+    raw_handler,
     ref_handler,
     eval_handler,
     make_cast_handler,
@@ -187,6 +190,7 @@ __all__ = [
     "ActionNode",
     "ActionTypeRegistry",
     "Pipeline",
+    "PipelineSignal",
     "Engine",
     "UnescapeRule",
     # shared matchers
@@ -207,6 +211,7 @@ __all__ = [
     "SpecialFn",
     "SpecialMatcher",
     "SpecialResolveHandler",
+    "raw_handler",
     "ref_handler",
     "eval_handler",
     "make_cast_handler",
@@ -289,6 +294,7 @@ __all__ = [
     "BreakSignal",
     "ContinueSignal",
     "ReturnSignal",
+    "RawValueSignal",
     # resolvers
     "PointerResolver",
     # processors

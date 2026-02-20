@@ -33,6 +33,7 @@ from .constructs import (
     regex_replace_handler, regex_groups_handler,
     make_regex_match_handler, make_regex_search_handler, make_regex_findall_handler,
     make_regex_replace_handler, make_regex_groups_handler,
+    raw_handler,
 )
 from .container import ContainerMatcher, RecursiveDescentHandler
 from .flow import (
@@ -44,7 +45,7 @@ from .function import (
     RaiseMatcher, RaiseHandler, JPermError,
     ReturnMatcher, ReturnHandler,
 )
-from .signals import BreakSignal, ContinueSignal, ReturnSignal
+from .signals import BreakSignal, ContinueSignal, ReturnSignal, RawValueSignal
 from .identity import IdentityHandler
 from .ops import (
     SetHandler, CopyHandler,
@@ -152,4 +153,7 @@ __all__ = [
     "BreakSignal",
     "ContinueSignal",
     "ReturnSignal",
+    "RawValueSignal",
+    # raw construct
+    "raw_handler",
 ]

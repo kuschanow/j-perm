@@ -40,6 +40,7 @@ from .handlers.constructs import (
     # Regex operations
     make_regex_match_handler, make_regex_search_handler, make_regex_findall_handler,
     make_regex_replace_handler, make_regex_groups_handler,
+    raw_handler,
 )
 from .handlers.container import ContainerMatcher, RecursiveDescentHandler
 from .handlers.flow import (
@@ -241,6 +242,15 @@ def build_default_engine(
                 timeout=regex_timeout,
                 allowed_flags=regex_allowed_flags,
             ),
+            # $func is registered here (not as a separate node) so that
+            # SpecialResolveHandler handles it — giving $raw: True flag support.
+            # It must come before $raw so {"$func": ..., "$raw": True} dispatches
+            # to $func first.
+            "$func": CallHandler().execute,
+            # $raw must be last so that {"$ref": ..., "$raw": True} dispatches
+            # to its primary construct first; the flag is then caught by
+            # SpecialResolveHandler after the primary handler returns.
+            "$raw": raw_handler,
         }
 
     # -- value pipeline -----------------------------------------------------
@@ -253,12 +263,6 @@ def build_default_engine(
             matcher=SpecialMatcher(special_keys),
             handler=SpecialResolveHandler(specials),
         ))
-
-    value_reg.register(ActionNode(
-        name="function", priority=9,
-        matcher=CallMatcher(),
-        handler=CallHandler(),
-    ))
 
     value_reg.register(ActionNode(
         name="template", priority=8,

@@ -21,10 +21,9 @@ Example usage::
         "$custom": my_custom_handler,
     })
 """
-
 from .handlers.constructs import (
     # Core
-    ref_handler, eval_handler,
+    ref_handler, eval_handler, raw_handler,
     # Logical
     and_handler, or_handler, not_handler,
     # Comparison
@@ -50,6 +49,7 @@ from .handlers.constructs import (
 CORE_HANDLERS = {
     "$ref": ref_handler,
     "$eval": eval_handler,
+    "$raw": raw_handler,
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -135,6 +135,7 @@ ALL_HANDLERS_NO_CAST = {
     **REGEX_HANDLERS,
 }
 
+
 # Helper function to get all handlers including $cast
 def get_all_handlers(casters=None):
     """Get all handlers including $cast with specified casters.
@@ -166,19 +167,19 @@ def get_all_handlers(casters=None):
 
 
 def get_all_handlers_with_limits(
-    casters=None,
-    regex_timeout=2.0,
-    regex_allowed_flags=None,
-    pow_max_base=1e6,
-    pow_max_exponent=1000,
-    mul_max_string_result=1_000_000,
-    mul_max_operand=1e9,
-    add_max_number_result=1e15,
-    add_max_string_result=100_000_000,
-    sub_max_number_result=1e15,
-    str_max_split_results=100_000,
-    str_max_join_result=10_000_000,
-    str_max_replace_result=10_000_000,
+        casters=None,
+        regex_timeout=2.0,
+        regex_allowed_flags=None,
+        pow_max_base=1e6,
+        pow_max_exponent=1000,
+        mul_max_string_result=1_000_000,
+        mul_max_operand=1e9,
+        add_max_number_result=1e15,
+        add_max_string_result=100_000_000,
+        sub_max_number_result=1e15,
+        str_max_split_results=100_000,
+        str_max_join_result=10_000_000,
+        str_max_replace_result=10_000_000,
 ):
     """Get all handlers with custom security limits.
 
