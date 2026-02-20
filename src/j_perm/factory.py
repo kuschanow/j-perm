@@ -96,6 +96,9 @@ def build_default_engine(
         add_max_number_result: float = 1e15,
         add_max_string_result: int = 100_000_000,
         sub_max_number_result: float = 1e15,
+        # Logging / tracing
+        trace_logging: bool = False,
+        trace_repr_max: int | None = 200,
 ) -> Engine:
     """Assemble an Engine with the standard resolver and pipelines.
 
@@ -149,6 +152,11 @@ def build_default_engine(
         add_max_number_result:   Maximum numeric result from ``$add`` (default: 1e15).
         add_max_string_result:   Maximum string length result from ``$add`` (default: 100_000_000).
         sub_max_number_result:   Maximum numeric result from ``$sub`` (default: 1e15).
+        trace_logging:           If ``True``, emit a ``DEBUG`` log line (via the ``j_perm``
+                                 logger) for every step executed in the main pipeline.
+                                 Useful for tracing execution flow without errors.
+        trace_repr_max:          Maximum characters per step in the language call stack
+                                 and trace output.  ``None`` disables truncation.
 
     Returns:
         Fully wired ``Engine`` ready for use.
@@ -378,7 +386,7 @@ def build_default_engine(
         handler=ContinueHandler(),
     ))
 
-    main_pipeline = Pipeline(stages=main_stages, registry=main_reg)
+    main_pipeline = Pipeline(stages=main_stages, registry=main_reg, track_execution=True)
 
     # -- unescape rules -----------------------------------------------------
     unescape_rules = [
@@ -395,4 +403,6 @@ def build_default_engine(
         unescape_rules=unescape_rules,
         max_operations=max_operations,
         max_function_recursion_depth=max_function_recursion_depth,
+        trace_logging=trace_logging,
+        trace_repr_max=trace_repr_max,
     )

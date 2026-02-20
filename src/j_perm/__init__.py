@@ -33,6 +33,7 @@ from .core import (
     ActionNode,
     ActionTypeRegistry,
     Pipeline,
+    ControlFlowSignal,
     PipelineSignal,
     Engine,
     UnescapeRule
@@ -190,6 +191,7 @@ __all__ = [
     "ActionNode",
     "ActionTypeRegistry",
     "Pipeline",
+    "ControlFlowSignal",
     "PipelineSignal",
     "Engine",
     "UnescapeRule",

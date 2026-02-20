@@ -12,24 +12,24 @@ by loop/function handlers — they do **not** inherit from ``PipelineSignal``.
 stabilisation loop and return the raw value as-is.
 """
 
-from ..core import PipelineSignal
+from ..core import ControlFlowSignal, PipelineSignal
 
 
-class BreakSignal(Exception):
+class BreakSignal(ControlFlowSignal):
     """Raised by ``$break`` to exit the innermost ``foreach`` or ``while`` loop."""
 
     def __init__(self) -> None:
         super().__init__("$break used outside of a loop")
 
 
-class ContinueSignal(Exception):
+class ContinueSignal(ControlFlowSignal):
     """Raised by ``$continue`` to skip to the next iteration of the innermost loop."""
 
     def __init__(self) -> None:
         super().__init__("$continue used outside of a loop")
 
 
-class ReturnSignal(Exception):
+class ReturnSignal(ControlFlowSignal):
     """Raised by ``$return`` to exit the current function with a value.
 
     Attributes:

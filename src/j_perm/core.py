@@ -25,10 +25,54 @@ Execution flow (``Engine.apply`` entry point)::
 from __future__ import annotations
 
 import copy
+import logging
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional, Tuple, Union
+
+_log = logging.getLogger("j_perm")
+_log_values = logging.getLogger("j_perm.values")
+
+# Metadata key for the language-level execution stack
+_LANG_EXEC_STACK_KEY = "_lang_exec_stack"
+
+def _repr_step(step: Any, max_len: Optional[int] = 200) -> str:
+    """Compact human-readable representation of a DSL step for the language call stack.
+
+    Args:
+        step:    The DSL step to format.
+        max_len: Maximum string length before truncating with ``"..."``.
+                 ``None`` disables truncation (shows the full step).
+    """
+    def _trunc(s: str) -> str:
+        if max_len is None or len(s) <= max_len:
+            return s
+        return s[:max_len - 3] + "..."
+
+    try:
+        if not isinstance(step, dict):
+            return _trunc(repr(step))
+        parts = []
+        for k, v in step.items():
+            if isinstance(v, list):
+                vr = f"[{len(v)} items]"
+            elif isinstance(v, dict) and len(repr(v)) > 50:
+                vr = "{...}"
+            else:
+                vr = repr(v)
+            parts.append(f"{k!r}: {vr}")
+        return _trunc("{" + ", ".join(parts) + "}")
+    except Exception:
+        return "<unprintable step>"
+
+
+def _format_lang_stack(frames: list) -> str:
+    """Format a list of language stack frames for human-readable display."""
+    if not frames:
+        return "  (empty)"
+    lines = [f"  #{i + 1:<3} {frame}" for i, frame in enumerate(frames)]
+    return "\n".join(lines)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -364,6 +408,22 @@ class AsyncMiddleware(ABC):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ControlFlowSignal — base for $break / $continue / $return
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class ControlFlowSignal(Exception):
+    """Base class for control flow signals ($break, $continue, $return).
+
+    These are NOT errors — they implement loop/function control flow.
+    They inherit from ``Exception`` so that ``Pipeline.run`` can distinguish
+    them from real errors and skip error annotation / logging.
+
+    Concrete subclasses live in ``handlers/signals.py``.
+    """
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # PipelineSignal — extensible in-pipeline control flow
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -619,10 +679,12 @@ class Pipeline:
             registry: Optional[ActionTypeRegistry] = None,
             stages: Optional[StageRegistry] = None,
             middlewares: Optional[List[Middleware]] = None,
+            track_execution: bool = False,
     ) -> None:
         self.registry = registry or ActionTypeRegistry()
         self.stages = stages or StageRegistry()
         self._middlewares = list(middlewares) if middlewares else []
+        self.track_execution = track_execution
 
     # -- registration -------------------------------------------------------
 
@@ -661,10 +723,30 @@ class Pipeline:
                         f"maximum allowed is {max_ops}"
                     )
 
+                # Track language-level execution stack
+                if self.track_execution:
+                    lang_stack = ctx.metadata.setdefault(_LANG_EXEC_STACK_KEY, [])
+                    repr_max = getattr(ctx.engine, 'trace_repr_max', 200)
+                    frame = _repr_step(step, max_len=repr_max)
+                    lang_stack.append(frame)
+                    if getattr(ctx.engine, 'trace_logging', False):
+                        _log.debug("%s→ %s", "  " * (len(lang_stack) - 1), frame)
+                else:
+                    lang_stack = None
+
                 try:
                     ctx.dest = handler.execute(step, ctx)
                 except PipelineSignal as sig:
                     sig.handle(ctx)
+                except ControlFlowSignal:
+                    raise  # $break / $continue / $return — not errors, don't annotate
+                except Exception as e:
+                    if lang_stack is not None and not hasattr(e, '_j_perm_lang_stack'):
+                        e._j_perm_lang_stack = list(lang_stack)
+                    raise
+                finally:
+                    if lang_stack is not None:
+                        lang_stack.pop()
 
     # -- async execution ----------------------------------------------------
 
@@ -702,6 +784,17 @@ class Pipeline:
                         f"maximum allowed is {max_ops}"
                     )
 
+                # Track language-level execution stack
+                if self.track_execution:
+                    lang_stack = ctx.metadata.setdefault(_LANG_EXEC_STACK_KEY, [])
+                    repr_max = getattr(ctx.engine, 'trace_repr_max', 200)
+                    frame = _repr_step(step, max_len=repr_max)
+                    lang_stack.append(frame)
+                    if getattr(ctx.engine, 'trace_logging', False):
+                        _log.debug("%s→ %s", "  " * (len(lang_stack) - 1), frame)
+                else:
+                    lang_stack = None
+
                 try:
                     # Check if handler is async
                     if isinstance(handler, AsyncActionHandler):
@@ -710,6 +803,15 @@ class Pipeline:
                         ctx.dest = handler.execute(step, ctx)
                 except PipelineSignal as sig:
                     sig.handle(ctx)
+                except ControlFlowSignal:
+                    raise  # $break / $continue / $return — not errors, don't annotate
+                except Exception as e:
+                    if lang_stack is not None and not hasattr(e, '_j_perm_lang_stack'):
+                        e._j_perm_lang_stack = list(lang_stack)
+                    raise
+                finally:
+                    if lang_stack is not None:
+                        lang_stack.pop()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -776,6 +878,8 @@ class Engine:
             custom_functions: Optional[dict[str, Callable]] = None,
             max_operations: int = 1_000_000,
             max_function_recursion_depth: int = 100,
+            trace_logging: bool = False,
+            trace_repr_max: Optional[int] = 200,
     ) -> None:
         self.resolver = resolver
         self.processor = processor
@@ -786,6 +890,12 @@ class Engine:
         self.max_function_recursion_depth = max_function_recursion_depth
         self._pipelines = dict(pipelines) if pipelines else {}
         self._unescape_rules = sorted(unescape_rules or [], key=lambda r: r.priority, reverse=True)
+        self.trace_logging = trace_logging
+        """If ``True``, emit a ``DEBUG`` log line for every main-pipeline step as it executes."""
+        self.trace_repr_max = trace_repr_max
+        """Max characters per step in the language call stack / trace output.
+        ``None`` disables truncation and shows each step in full.
+        """
         for name, func in (custom_functions or {}).items():
             setattr(self, name, func)
 
@@ -807,13 +917,28 @@ class Engine:
         *source* is normalized (tuples → lists for JMESPath compatibility).
         *dest* is deep-copied before processing; the return value is another
         deep copy so the caller's original is never touched.
+
+        On unhandled error, logs the language-level call stack at ``ERROR``
+        level via the ``j_perm`` logger before re-raising.
         """
         ctx = ExecutionContext(
             source=_tuples_to_lists(source),
             dest=copy.deepcopy(dest),
             engine=self,
         )
-        self.main_pipeline.run(spec, ctx)
+        try:
+            self.main_pipeline.run(spec, ctx)
+        except Exception as e:
+            if not isinstance(e, (PipelineSignal, ControlFlowSignal)):
+                lang_stack = getattr(e, '_j_perm_lang_stack', None)
+                if lang_stack:
+                    _log.error(
+                        "j-perm execution failed: %s: %s\n"
+                        "Language call stack (innermost last):\n%s",
+                        type(e).__name__, e,
+                        _format_lang_stack(lang_stack),
+                    )
+            raise
         return copy.deepcopy(ctx.dest)
 
     async def apply_async(self, spec: Any, *, source: Any, dest: Any) -> Any:
@@ -821,13 +946,28 @@ class Engine:
 
         Execute a DSL script through *main_pipeline* asynchronously.
         Supports async handlers, stages, and middlewares.
+
+        On unhandled error, logs the language-level call stack at ``ERROR``
+        level via the ``j_perm`` logger before re-raising.
         """
         ctx = ExecutionContext(
             source=_tuples_to_lists(source),
             dest=copy.deepcopy(dest),
             engine=self,
         )
-        await self.main_pipeline.run_async(spec, ctx)
+        try:
+            await self.main_pipeline.run_async(spec, ctx)
+        except Exception as e:
+            if not isinstance(e, (PipelineSignal, ControlFlowSignal)):
+                lang_stack = getattr(e, '_j_perm_lang_stack', None)
+                if lang_stack:
+                    _log.error(
+                        "j-perm execution failed: %s: %s\n"
+                        "Language call stack (innermost last):\n%s",
+                        type(e).__name__, e,
+                        _format_lang_stack(lang_stack),
+                    )
+            raise
         return copy.deepcopy(ctx.dest)
 
     def apply_to_context(self, spec: Any, ctx: ExecutionContext) -> Any:
@@ -857,12 +997,34 @@ class Engine:
         """
         if name not in self._pipelines:
             raise KeyError(f"Pipeline {name!r} not registered")
+        pipeline = self._pipelines[name]
+        log_pl = logging.getLogger(f"j_perm.pipeline.{name}")
+        # Share the parent's lang_exec_stack so named-pipeline steps are
+        # visible in the integrated trace and error call stack.
+        parent_stack = ctx.metadata.get(_LANG_EXEC_STACK_KEY)
+        sub_meta: dict = {_LANG_EXEC_STACK_KEY: parent_stack} if parent_stack is not None else {}
         sub_ctx = ExecutionContext(
             source=ctx.source,
             dest=copy.deepcopy(ctx.dest),
             engine=self,
+            metadata=sub_meta,
         )
-        self._pipelines[name].run(spec, sub_ctx)
+        if log_pl.isEnabledFor(logging.DEBUG):
+            depth = len(parent_stack) if parent_stack is not None else 0
+            log_pl.debug("%s→ [pipeline:%s]", "  " * depth, name)
+        try:
+            pipeline.run(spec, sub_ctx)
+        except Exception as e:
+            if not isinstance(e, (PipelineSignal, ControlFlowSignal)):
+                lang_stack = getattr(e, '_j_perm_lang_stack', None)
+                if lang_stack:
+                    log_pl.error(
+                        "pipeline %r failed: %s: %s\n"
+                        "Language call stack (innermost last):\n%s",
+                        name, type(e).__name__, e,
+                        _format_lang_stack(lang_stack),
+                    )
+            raise
         return copy.deepcopy(sub_ctx.dest)
 
     async def run_pipeline_async(self, name: str, spec: Any, ctx: ExecutionContext) -> Any:
@@ -874,12 +1036,32 @@ class Engine:
         """
         if name not in self._pipelines:
             raise KeyError(f"Pipeline {name!r} not registered")
+        pipeline = self._pipelines[name]
+        log_pl = logging.getLogger(f"j_perm.pipeline.{name}")
+        parent_stack = ctx.metadata.get(_LANG_EXEC_STACK_KEY)
+        sub_meta: dict = {_LANG_EXEC_STACK_KEY: parent_stack} if parent_stack is not None else {}
         sub_ctx = ExecutionContext(
             source=ctx.source,
             dest=copy.deepcopy(ctx.dest),
             engine=self,
+            metadata=sub_meta,
         )
-        await self._pipelines[name].run_async(spec, sub_ctx)
+        if log_pl.isEnabledFor(logging.DEBUG):
+            depth = len(parent_stack) if parent_stack is not None else 0
+            log_pl.debug("%s→ [pipeline:%s]", "  " * depth, name)
+        try:
+            await pipeline.run_async(spec, sub_ctx)
+        except Exception as e:
+            if not isinstance(e, (PipelineSignal, ControlFlowSignal)):
+                lang_stack = getattr(e, '_j_perm_lang_stack', None)
+                if lang_stack:
+                    log_pl.error(
+                        "pipeline %r failed: %s: %s\n"
+                        "Language call stack (innermost last):\n%s",
+                        name, type(e).__name__, e,
+                        _format_lang_stack(lang_stack),
+                    )
+            raise
         return copy.deepcopy(sub_ctx.dest)
 
     def process_value(self, value: Any, ctx: ExecutionContext, *, _unescape: bool = True) -> Any:
@@ -900,6 +1082,10 @@ class Engine:
         if self.value_pipeline is None:
             return value
 
+        trace = _log_values.isEnabledFor(logging.DEBUG)
+        repr_max = self.trace_repr_max
+        indent = "  " * len(ctx.metadata.get(_LANG_EXEC_STACK_KEY, []))
+
         current = value
         for _ in range(self.value_max_depth):
             # Save real dest in metadata for JMESPath access
@@ -916,6 +1102,13 @@ class Engine:
                 break
             if value_ctx.dest == current:
                 break
+            if trace:
+                _log_values.debug(
+                    "%s  %s → %s",
+                    indent,
+                    _repr_step(current, max_len=repr_max),
+                    _repr_step(value_ctx.dest, max_len=repr_max),
+                )
             current = value_ctx.dest
         else:
             raise RecursionError("value_max_depth exceeded")
@@ -933,6 +1126,10 @@ class Engine:
         """
         if self.value_pipeline is None:
             return value
+
+        trace = _log_values.isEnabledFor(logging.DEBUG)
+        repr_max = self.trace_repr_max
+        indent = "  " * len(ctx.metadata.get(_LANG_EXEC_STACK_KEY, []))
 
         current = value
         for _ in range(self.value_max_depth):
@@ -952,6 +1149,13 @@ class Engine:
                 break
             if value_ctx.dest == current:
                 break
+            if trace:
+                _log_values.debug(
+                    "%s  %s → %s",
+                    indent,
+                    _repr_step(current, max_len=repr_max),
+                    _repr_step(value_ctx.dest, max_len=repr_max),
+                )
             current = value_ctx.dest
         else:
             raise RecursionError("value_max_depth exceeded")
