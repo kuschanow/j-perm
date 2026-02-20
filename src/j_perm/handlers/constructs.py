@@ -1,4 +1,4 @@
-"""Special construct handlers: ``$ref``, ``$eval``, and ``$cast``.
+"""Special construct handlers: ``$ref``, ``$eval``, ``$cast``, ``$raw``, and more.
 
 These are ``SpecialFn`` callables meant to be registered with
 ``SpecialResolveHandler`` in the value pipeline.
@@ -16,6 +16,12 @@ eval_handler
 make_cast_handler
     Factory function that creates a cast handler with registered casters.
     Returns a handler for ``{"$cast": {"value": <value>, "type": <type_name>}}`` construct.
+
+raw_handler
+    Handles ``{"$raw": <literal>}`` construct.
+    Returns the literal value without any value-pipeline processing.
+    Use ``"$raw": True`` as a flag on other constructs to stop further
+    processing of their result (handled by ``SpecialResolveHandler``).
 """
 
 from __future__ import annotations
@@ -26,6 +32,7 @@ from typing import Any, Mapping, Callable
 
 import regex
 
+from .signals import RawValueSignal
 from ..core import ExecutionContext
 
 _MISSING = object()
@@ -1536,3 +1543,27 @@ def make_cast_handler(casters: Mapping[str, Any]) -> Any:
         return caster(value)
 
     return cast_handler
+
+
+def raw_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$raw`` construct: return a literal value without any value-pipeline processing.
+
+    Schema::
+
+        {"$raw": <any value>}
+
+    The value of ``$raw`` is returned as-is — no template substitution, no
+    further construct resolution, no stabilisation iterations.
+
+    Use this to embed a literal that would otherwise be misinterpreted as a
+    construct::
+
+        {"$raw": {"$ref": "/not/a/ref"}}
+        {"$raw": "hello ${not_substituted}"}
+
+    For stopping further processing of an already-resolved construct result,
+    use the ``"$raw": True`` flag instead (handled by ``SpecialResolveHandler``)::
+
+        {"$ref": "&:result", "$raw": True}
+    """
+    raise RawValueSignal(node["$raw"])

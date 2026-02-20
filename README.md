@@ -3,7 +3,7 @@
 A composable JSON transformation DSL with a powerful, extensible architecture.
 
 J-Perm lets you describe data transformations as **executable specifications** — a list of steps that can be applied to input documents. It supports
-JSON Pointer addressing with slicing (arrays and strings), template interpolation with `${...}` syntax, special constructs (`$ref`, `$eval`, `$cast`), logical and comparison operators (`$and`, `$or`, `$not`), comparison operators (6 operators plus `$in` and `$exists`), mathematical operations (6 operators), comprehensive string manipulation (11 operations), regular expressions (5 operations), user-defined functions (`$def`, `$func`, `$raise`) with loop/function control flow (`$break`, `$continue`, `$return`), error handling (`try-except-finally`), and a rich set of built-in operations — all with configurable security limits to prevent DoS attacks.
+JSON Pointer addressing with slicing (arrays and strings), template interpolation with `${...}` syntax, special constructs (`$ref`, `$eval`, `$cast`, `$raw`), logical and comparison operators (`$and`, `$or`, `$not`), comparison operators (6 operators plus `$in` and `$exists`), mathematical operations (6 operators), comprehensive string manipulation (11 operations), regular expressions (5 operations), user-defined functions (`$def`, `$func`, `$raise`) with loop/function control flow (`$break`, `$continue`, `$return`), error handling (`try-except-finally`), and a rich set of built-in operations — all with configurable security limits to prevent DoS attacks.
 
 ---
 
@@ -130,6 +130,12 @@ engine = build_default_engine(
     regex_timeout=1.0,
     pow_max_exponent=100,
     # ... see factory.py for all available limits
+)
+
+# Logging / debugging (see Logging and Debugging section)
+engine = build_default_engine(
+    trace_logging=True,      # DEBUG-log every executed step
+    trace_repr_max=None,     # show steps without truncation (default: 200)
 )
 ```
 
@@ -322,6 +328,217 @@ permissive_engine = build_default_engine(
 - **Monitor** `max_operations` counter to detect suspicious activity
 - **Test** your transformations with realistic data sizes
 - **Tune** limits based on your specific use case
+
+---
+
+## Logging and Debugging
+
+J-Perm uses Python's standard `logging` module under the logger name **`j_perm`**.
+
+### Error Logging (Language Call Stack)
+
+When an unhandled exception escapes `Engine.apply()`, j-perm automatically logs the **language-level call stack** at `ERROR` level — showing exactly which operations were executing when the error occurred, without Python internals.
+
+```python
+import logging
+logging.basicConfig(level=logging.ERROR)
+
+engine = build_default_engine()
+
+engine.apply(
+    spec=[
+        {"op": "foreach", "in": "/users", "as": "user", "do": [
+            {"op": "if", "cond": True, "then": [
+                {"op": "set", "path": "/result/-", "value": {"$ref": "/missing/path"}}
+            ]}
+        ]}
+    ],
+    source={"users": ["Alice"]},
+    dest={},
+)
+```
+
+Output:
+```
+ERROR j_perm: j-perm execution failed: KeyError: 'missing'
+Language call stack (innermost last):
+  #1   {'op': 'foreach', 'in': '/users', 'as': 'user', 'do': [1 items]}
+  #2   {'op': 'if', 'cond': True, 'then': [1 items]}
+  #3   {'op': 'set', 'path': '/result/-', 'value': {'$ref': '/missing/path'}}
+```
+
+**Important:** Errors caught by `{"op": "try", ...}` inside the spec are **not logged** — only errors that propagate all the way out of `apply()` appear in the log. Control flow signals (`$break`, `$continue`, `$return`) are never treated as errors.
+
+The call stack is also attached to the exception itself for programmatic access:
+
+```python
+try:
+    engine.apply(spec, source=src, dest={})
+except Exception as e:
+    stack = getattr(e, "_j_perm_lang_stack", None)
+    if stack:
+        for i, frame in enumerate(stack, 1):
+            print(f"  #{i} {frame}")
+```
+
+### Trace Logging (Full Execution Log)
+
+To log every step as it executes — even without errors — enable `trace_logging`:
+
+```python
+import logging
+logging.basicConfig(level=logging.DEBUG)
+
+engine = build_default_engine(trace_logging=True)
+
+engine.apply(
+    spec=[
+        {"op": "set", "path": "/name", "value": "Alice"},
+        {"op": "foreach", "in": "/tags", "as": "tag", "do": [
+            {"op": "set", "path": "/out/-", "value": {"$ref": "&:/tag"}}
+        ]},
+    ],
+    source={"tags": ["x", "y"]},
+    dest={},
+)
+```
+
+Output (each step indented by nesting depth):
+```
+DEBUG j_perm: → {'op': 'set', 'path': '/name', 'value': 'Alice'}
+DEBUG j_perm: → {'op': 'foreach', 'in': '/tags', 'as': 'tag', 'do': [1 items]}
+DEBUG j_perm:   → {'op': 'set', 'path': '/out/-', 'value': {'$ref': '&:/tag'}}
+DEBUG j_perm:   → {'op': 'set', 'path': '/out/-', 'value': {'$ref': '&:/tag'}}
+```
+
+### Controlling Step Representation Length
+
+By default, each step is truncated to 200 characters in the call stack and trace output. Use `trace_repr_max` to change this:
+
+```python
+# Increase the limit
+engine = build_default_engine(trace_logging=True, trace_repr_max=500)
+
+# Disable truncation — show every step in full
+engine = build_default_engine(trace_logging=True, trace_repr_max=None)
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `trace_logging` | `False` | Emit `DEBUG` log for every executed step |
+| `trace_repr_max` | `200` | Max characters per step representation. `None` = no limit |
+
+### Value Resolution Tracing
+
+To see how each value is resolved through the value pipeline (template substitution, `$ref`, `$cast`, etc.), enable the `j_perm.values` sub-logger at `DEBUG` level:
+
+```python
+import logging
+logging.basicConfig(level=logging.DEBUG)
+
+engine = build_default_engine(trace_logging=True)  # also enable step trace for full picture
+
+engine.apply(
+    spec=[{"op": "set", "path": "/greeting", "value": "Hello, ${/name}!"}],
+    source={"name": "Alice"},
+    dest={},
+)
+```
+
+Output — `j_perm` shows the step, `j_perm.values` shows each transformation:
+```
+DEBUG j_perm:        → {'op': 'set', 'path': '/greeting', 'value': 'Hello, ${/name}!'}
+DEBUG j_perm.values:   'Hello, ${/name}!' → 'Hello, Alice!'
+```
+
+Value tracing is independent of `trace_logging` — you can enable it alone:
+
+```python
+import logging
+
+# Enable only value resolution tracing, suppress step-level trace
+logging.getLogger("j_perm.values").setLevel(logging.DEBUG)
+logging.getLogger("j_perm").setLevel(logging.ERROR)  # suppress step trace
+```
+
+Each line shows one stabilization pass: `input → output`. Multi-step resolution (e.g., `$ref` returning a template that itself gets substituted) appears as multiple lines, indented to the current call depth.
+
+### Named Pipeline Tracing
+
+Each named pipeline gets its own logger: **`j_perm.pipeline.<name>`**. This lets you turn on tracing for all pipelines at once or zoom in on a specific one.
+
+```python
+import logging
+
+# All named pipelines
+logging.getLogger("j_perm.pipeline").setLevel(logging.DEBUG)
+
+# Only the "normalize" pipeline
+logging.getLogger("j_perm.pipeline.normalize").setLevel(logging.DEBUG)
+
+# Silence a specific pipeline while keeping others
+logging.getLogger("j_perm.pipeline.verbose_one").setLevel(logging.WARNING)
+```
+
+To produce step-level output inside a named pipeline, create it with `track_execution=True`:
+
+```python
+from j_perm import Pipeline, ActionTypeRegistry, ActionNode
+
+my_reg = ActionTypeRegistry()
+# ... register handlers ...
+my_pipeline = Pipeline(registry=my_reg, track_execution=True)
+engine.register_pipeline("normalize", my_pipeline)
+```
+
+When `run_pipeline("normalize", ...)` is called, the pipeline's logger emits a `→ [pipeline:normalize]` entry, and if `track_execution=True`, each step follows indented relative to the caller's depth:
+
+```
+DEBUG j_perm: → {'op': 'foreach', 'in': '/items', 'as': 'item', 'do': [1 items]}
+DEBUG j_perm.pipeline.normalize:   → [pipeline:normalize]
+DEBUG j_perm.pipeline.normalize:   → {'op': 'set', 'path': '/value', 'value': ...}
+```
+
+On error, the call stack (including both the outer context and the pipeline's own steps) is logged at `ERROR` level to `j_perm.pipeline.<name>`.
+
+### Logger Hierarchy
+
+J-Perm uses four loggers, all configurable independently via Python's standard `logging` module:
+
+| Logger | Level | When active |
+|--------|-------|-------------|
+| `j_perm` | `ERROR` | Unhandled error — logs language call stack |
+| `j_perm` | `DEBUG` | Step trace (requires `trace_logging=True` on engine) |
+| `j_perm.values` | `DEBUG` | Value resolution steps in `process_value` |
+| `j_perm.pipeline.<name>` | `ERROR` | Named pipeline error — logs call stack |
+| `j_perm.pipeline.<name>` | `DEBUG` | Named pipeline step trace (requires `track_execution=True` on pipeline) |
+
+All `j_perm.pipeline.*` loggers are children of `j_perm.pipeline`, which is itself a child of `j_perm` — so the standard Python logger hierarchy applies:
+
+```python
+import logging
+
+# Everything from j-perm (step trace + value trace + all pipeline traces)
+logging.getLogger("j_perm").setLevel(logging.DEBUG)
+
+# Only errors, no trace noise
+logging.getLogger("j_perm").setLevel(logging.ERROR)
+
+# Suppress all j-perm logging
+logging.getLogger("j_perm").setLevel(logging.CRITICAL)
+
+# Step trace only, no value noise
+logging.getLogger("j_perm").setLevel(logging.DEBUG)
+logging.getLogger("j_perm.values").setLevel(logging.WARNING)
+
+# All named pipeline traces, but not main-pipeline step trace
+logging.getLogger("j_perm").setLevel(logging.WARNING)
+logging.getLogger("j_perm.pipeline").setLevel(logging.DEBUG)
+
+# Only one specific pipeline
+logging.getLogger("j_perm.pipeline").setLevel(logging.WARNING)
+logging.getLogger("j_perm.pipeline.normalize").setLevel(logging.DEBUG)
+```
 
 ---
 
@@ -558,6 +775,58 @@ engine = build_default_engine(casters={"upper": custom_upper})
 
 # Use in spec
 {"/name": {"$cast": {"value": "alice", "type": "upper"}}}  # → "ALICE"
+```
+
+#### `$raw` — Return a literal without processing
+
+`$raw` has two forms:
+
+**Wrapper construct** — returns the value as-is, preventing all value-pipeline evaluation:
+
+```json
+{"$raw": {"$ref": "/not/evaluated"}}
+{"$raw": "hello ${not_substituted}"}
+{"$raw": [{"$ref": "/a"}, {"$ref": "/b"}]}
+```
+
+The wrapped value is never passed through template substitution, `$ref` resolution, or any other pipeline stage. Use this to store construct-shaped data as a literal.
+
+**Flag on any construct** — add `"$raw": true` to stop the stabilisation loop after the construct resolves:
+
+```json
+{"$ref": "/path", "$raw": true}
+{"$func": "myFunc", "$raw": true}
+{"$add": [1, 2], "$raw": true}
+```
+
+Without the flag, `process_value` keeps iterating until the result stabilises — so if `$ref` returns a value that itself contains a `$ref`, that too will be resolved. With `"$raw": true`, the loop stops after the first resolution and returns the result as-is.
+
+**Example — preventing chain resolution:**
+
+```python
+# source["/a"] contains another construct
+source = {"a": {"$ref": "/b"}, "b": "final"}
+
+# Without $raw: True — both hops resolved
+spec = {"/result": {"$ref": "/a"}}
+# → {"result": "final"}
+
+# With $raw: True — only first hop resolved
+spec = {"/result": {"$ref": "/a", "$raw": True}}
+# → {"result": {"$ref": "/b"}}
+```
+
+**Example — storing a construct as a literal:**
+
+```python
+spec = [
+    # Store a construct literally (not evaluated)
+    {"/template": {"$raw": {"$ref": "/data"}}},
+    # Later retrieve it — still unevaluated
+    {"/copy": {"$ref": "@:/template", "$raw": True}},
+]
+result = engine.apply(spec, source={"data": "value"}, dest={})
+# → {"template": {"$ref": "/data"}, "copy": {"$ref": "/data"}}
 ```
 
 #### `$and` — Logical AND with short-circuit
@@ -2199,6 +2468,52 @@ This resolves nested templates and special constructs:
 # Pass 3: "final" → "final" (stable ✓)
 ```
 
+To stop the loop early and return the current result as-is, use the `$raw: true` flag or the `$raw` wrapper construct (see [`$raw`](#raw--return-a-literal-without-processing)).
+
+### PipelineSignal — extensible in-pipeline control flow
+
+`PipelineSignal` is an abstract base class (defined in `core.py`) for signals that `Pipeline.run` intercepts. When a handler raises a `PipelineSignal`, `Pipeline.run` calls `signal.handle(ctx)`. If `handle` re-raises, the signal propagates up to the caller (e.g. `Engine.process_value`).
+
+This lets you add new pipeline-level behaviours without touching `core.py`:
+
+```python
+from j_perm import PipelineSignal
+
+class MySignal(PipelineSignal):
+    def __init__(self, value):
+        self.value = value
+
+    def handle(self, ctx):
+        ctx.dest = self.value
+        raise self  # propagate to stop the stabilisation loop
+```
+
+Built-in signals that inherit from `PipelineSignal`:
+
+| Signal | Raised by | Caught by |
+|--------|-----------|-----------|
+| `RawValueSignal` | `raw_handler`, `SpecialResolveHandler` (flag) | `Engine.process_value` |
+
+Control flow signals inherit from `ControlFlowSignal` (not `PipelineSignal`):
+
+| Signal | Raised by | Caught by |
+|--------|-----------|-----------|
+| `BreakSignal` | `$break` | `foreach` / `while` handler |
+| `ContinueSignal` | `$continue` | `foreach` / `while` handler |
+| `ReturnSignal` | `$return` | `$func` call handler |
+
+`ControlFlowSignal` is the common base for all three. `Pipeline.run` treats them as non-errors and never attaches a language call stack to them. You can catch the base class if you need to intercept any control flow signal propagating out of a custom handler:
+
+```python
+from j_perm import ControlFlowSignal
+
+try:
+    engine.apply(spec, source=src, dest={})
+except ControlFlowSignal:
+    # $break / $continue / $return used outside their valid scope
+    ...
+```
+
 ---
 
 ### Hierarchical Registries
@@ -2285,6 +2600,10 @@ from j_perm import (
     Middleware,
     AsyncMiddleware,  # Async version
 
+    # Pipeline control flow (base classes for extensible signals)
+    ControlFlowSignal,  # Base for $break / $continue / $return signals
+    PipelineSignal,     # Base for value-pipeline signals (e.g. RawValueSignal)
+
     # Unescape
     UnescapeRule,
 )
@@ -2304,6 +2623,7 @@ from j_perm import (
     IdentityHandler,
 
     # Special construct functions
+    raw_handler,        # $raw wrapper / literal escape
     ref_handler,
     eval_handler,
     make_cast_handler,  # Factory for $cast handler
@@ -2380,9 +2700,10 @@ from j_perm import (
     ContinueHandler,
 
     # Control flow signals (exceptions)
-    BreakSignal,    # raised by $break
-    ContinueSignal, # raised by $continue
-    ReturnSignal,   # raised by $return (.value holds the return value)
+    BreakSignal,       # raised by $break
+    ContinueSignal,    # raised by $continue
+    ReturnSignal,      # raised by $return (.value holds the return value)
+    RawValueSignal,    # raised by $raw / $raw:True flag (.value = raw result)
 
     # Operation handlers
     SetHandler,

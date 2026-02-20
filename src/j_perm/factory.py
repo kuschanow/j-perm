@@ -40,6 +40,7 @@ from .handlers.constructs import (
     # Regex operations
     make_regex_match_handler, make_regex_search_handler, make_regex_findall_handler,
     make_regex_replace_handler, make_regex_groups_handler,
+    raw_handler,
 )
 from .handlers.container import ContainerMatcher, RecursiveDescentHandler
 from .handlers.flow import (
@@ -95,6 +96,9 @@ def build_default_engine(
         add_max_number_result: float = 1e15,
         add_max_string_result: int = 100_000_000,
         sub_max_number_result: float = 1e15,
+        # Logging / tracing
+        trace_logging: bool = False,
+        trace_repr_max: int | None = 200,
 ) -> Engine:
     """Assemble an Engine with the standard resolver and pipelines.
 
@@ -148,6 +152,11 @@ def build_default_engine(
         add_max_number_result:   Maximum numeric result from ``$add`` (default: 1e15).
         add_max_string_result:   Maximum string length result from ``$add`` (default: 100_000_000).
         sub_max_number_result:   Maximum numeric result from ``$sub`` (default: 1e15).
+        trace_logging:           If ``True``, emit a ``DEBUG`` log line (via the ``j_perm``
+                                 logger) for every step executed in the main pipeline.
+                                 Useful for tracing execution flow without errors.
+        trace_repr_max:          Maximum characters per step in the language call stack
+                                 and trace output.  ``None`` disables truncation.
 
     Returns:
         Fully wired ``Engine`` ready for use.
@@ -241,6 +250,15 @@ def build_default_engine(
                 timeout=regex_timeout,
                 allowed_flags=regex_allowed_flags,
             ),
+            # $func is registered here (not as a separate node) so that
+            # SpecialResolveHandler handles it — giving $raw: True flag support.
+            # It must come before $raw so {"$func": ..., "$raw": True} dispatches
+            # to $func first.
+            "$func": CallHandler().execute,
+            # $raw must be last so that {"$ref": ..., "$raw": True} dispatches
+            # to its primary construct first; the flag is then caught by
+            # SpecialResolveHandler after the primary handler returns.
+            "$raw": raw_handler,
         }
 
     # -- value pipeline -----------------------------------------------------
@@ -253,12 +271,6 @@ def build_default_engine(
             matcher=SpecialMatcher(special_keys),
             handler=SpecialResolveHandler(specials),
         ))
-
-    value_reg.register(ActionNode(
-        name="function", priority=9,
-        matcher=CallMatcher(),
-        handler=CallHandler(),
-    ))
 
     value_reg.register(ActionNode(
         name="template", priority=8,
@@ -374,7 +386,7 @@ def build_default_engine(
         handler=ContinueHandler(),
     ))
 
-    main_pipeline = Pipeline(stages=main_stages, registry=main_reg)
+    main_pipeline = Pipeline(stages=main_stages, registry=main_reg, track_execution=True)
 
     # -- unescape rules -----------------------------------------------------
     unescape_rules = [
@@ -391,4 +403,6 @@ def build_default_engine(
         unescape_rules=unescape_rules,
         max_operations=max_operations,
         max_function_recursion_depth=max_function_recursion_depth,
+        trace_logging=trace_logging,
+        trace_repr_max=trace_repr_max,
     )
