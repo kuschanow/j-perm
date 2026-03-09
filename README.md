@@ -576,14 +576,16 @@ resolver.set("/items/-", data, "new")  # Append to list
 
 #### Data Source Prefixes
 
-J-Perm supports **prefixes** to specify which context to read from:
+J-Perm supports **prefixes** to specify which context to read from or write to:
 
 | Prefix | Source | Description |
 |--------|--------|-------------|
 | `/path` or `_:/path` | **source** | Read from the immutable source document |
-| `@:/path` | **dest** | Read from the destination being built |
+| `@:/path` | **dest** | Read/write from the destination being built |
 | `&:/path` | **args** | Read from `temp_read_only` — function arguments, loop variables, error info |
-| `!:/path` | **temp** | Read from `temp` — mutable scratch space, not in final output |
+| `!:/path` | **temp** | Read/write `temp` — mutable scratch space, not included in the final output |
+
+The `!:` prefix supports both reading and writing. Values written to `temp` never appear in the final result, making it suitable for intermediate state. Use `${str:!:/path}` to force string coercion when needed.
 
 The `&:` prefix is the standard way to access:
 - **Function parameters** inside `$def` bodies
