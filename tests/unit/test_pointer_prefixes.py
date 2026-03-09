@@ -185,6 +185,23 @@ class TestExclamationPrefix:
 
         assert ctx.dest["result"] == 42
 
+    def test_exclamation_write_via_op_set(self):
+        """op:set with path '!:/key' writes to temp, not dest."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            [
+                {"op": "set", "path": "!:/scratch", "value": 99},
+                {"/result": "${!:/scratch}"},
+            ],
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": 99}
+        assert "scratch" not in result
+        assert "!:" not in result
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # _: prefix — source (alias for plain /)
@@ -342,3 +359,33 @@ class TestShorthandPrefixRecognition:
         )
 
         assert result == {"x": 5, "y": 5}
+
+    def test_shorthand_exclamation_prefix_as_dest(self):
+        """Shorthand '!:/key': value writes to temp, not dest."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            [
+                {"!:/tmp": 42},
+                {"/result": "${!:/tmp}"},
+            ],
+            source={},
+            dest={},
+        )
+
+        assert result == {"result": 42}
+        assert "!:" not in result
+
+    def test_shorthand_exclamation_prefix_as_source(self):
+        """Shorthand '/dest': '!:/key' copies from temp to dest."""
+        engine = build_default_engine()
+
+        ctx = ExecutionContext(
+            source={},
+            dest={},
+            engine=engine,
+            temp={"val": 7},
+        )
+        engine.apply_to_context([{"/result": "!:/val"}], ctx)
+
+        assert ctx.dest == {"result": 7}

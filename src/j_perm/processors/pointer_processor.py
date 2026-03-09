@@ -102,14 +102,21 @@ class PointerProcessor(ValueProcessor):
             Write operations always execute in ctx.dest, as source is immutable.
             Prefixes @:/, &:/ are ignored.
         """
-        # Remove prefix if present (set always to dest)
-        clean_path = pointer
-        if pointer.startswith("@:/") or pointer.startswith("@:"):
-            clean_path = "/" + pointer[2:].lstrip("/")
-        elif pointer.startswith("&:/") or pointer.startswith("&:"):
-            clean_path = "/" + pointer[2:].lstrip("/")
-
-        ctx.engine.resolver.set(clean_path, ctx.dest, value)
+        if pointer.startswith("!:"):
+            normalized = "/" + pointer[2:].lstrip("/")
+            ctx.engine.resolver.set(normalized, ctx.temp, value)
+        else:
+            if pointer.startswith("@:"):
+                normalized = "/" + pointer[2:].lstrip("/")
+            else:
+                # plain /path, _:, &: — strip prefix if any, write to dest
+                if pointer.startswith("/"):
+                    normalized = pointer
+                elif pointer.startswith(("_:", "&:")):
+                    normalized = "/" + pointer[2:].lstrip("/")
+                else:
+                    normalized = "/" + pointer
+            ctx.engine.resolver.set(normalized, ctx.dest, value)
 
     def delete(
             self,
