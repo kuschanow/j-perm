@@ -389,3 +389,95 @@ class TestShorthandPrefixRecognition:
         engine.apply_to_context([{"/result": "!:/val"}], ctx)
 
         assert ctx.dest == {"result": 7}
+
+
+class TestPointerProcessorDirectCalls:
+    """Test PointerProcessor set/delete methods with various prefixes."""
+
+    def _make_ctx(self, source=None, dest=None, temp=None):
+        from j_perm import build_default_engine
+        engine = build_default_engine()
+        return ExecutionContext(
+            source=source or {},
+            dest=dest or {},
+            engine=engine,
+            temp=temp or {},
+        )
+
+    def test_set_with_at_prefix_writes_to_dest(self):
+        """processor.set('@:/foo', ctx, val) writes to dest (line 110)."""
+        from j_perm.processors.pointer_processor import PointerProcessor
+
+        processor = PointerProcessor()
+        ctx = self._make_ctx(dest={})
+
+        processor.set("@:/foo", ctx, 42)
+
+        assert ctx.dest["foo"] == 42
+
+    def test_set_with_underscore_prefix_writes_to_dest(self):
+        """processor.set('_:/foo', ctx, val) writes to dest (lines 115-116)."""
+        from j_perm.processors.pointer_processor import PointerProcessor
+
+        processor = PointerProcessor()
+        ctx = self._make_ctx(dest={})
+
+        processor.set("_:/foo", ctx, "value")
+
+        assert ctx.dest["foo"] == "value"
+
+    def test_set_with_ampersand_prefix_writes_to_dest(self):
+        """processor.set('&:/foo', ctx, val) writes to dest (lines 115-116)."""
+        from j_perm.processors.pointer_processor import PointerProcessor
+
+        processor = PointerProcessor()
+        ctx = self._make_ctx(dest={})
+
+        processor.set("&:/foo", ctx, "value")
+
+        assert ctx.dest["foo"] == "value"
+
+    def test_set_with_bare_path_no_slash_writes_to_dest(self):
+        """processor.set('foo', ctx, val) without slash writes to dest (line 118)."""
+        from j_perm.processors.pointer_processor import PointerProcessor
+
+        processor = PointerProcessor()
+        ctx = self._make_ctx(dest={})
+
+        processor.set("foo", ctx, 99)
+
+        assert ctx.dest["foo"] == 99
+
+    def test_delete_with_at_prefix_deletes_from_dest(self):
+        """processor.delete('@:/foo', ctx) deletes from dest (line 144)."""
+        from j_perm.processors.pointer_processor import PointerProcessor
+
+        processor = PointerProcessor()
+        ctx = self._make_ctx(dest={"foo": 1, "bar": 2})
+
+        processor.delete("@:/foo", ctx)
+
+        assert "foo" not in ctx.dest
+        assert "bar" in ctx.dest
+
+    def test_delete_with_ampersand_prefix_deletes_from_dest(self):
+        """processor.delete('&:/foo', ctx) deletes from dest (line 146)."""
+        from j_perm.processors.pointer_processor import PointerProcessor
+
+        processor = PointerProcessor()
+        ctx = self._make_ctx(dest={"foo": 1, "bar": 2})
+
+        processor.delete("&:/foo", ctx)
+
+        assert "foo" not in ctx.dest
+
+    def test_delete_with_underscore_prefix_deletes_from_dest(self):
+        """processor.delete('_:/foo', ctx) deletes from dest (line 146)."""
+        from j_perm.processors.pointer_processor import PointerProcessor
+
+        processor = PointerProcessor()
+        ctx = self._make_ctx(dest={"foo": 1})
+
+        processor.delete("_:/foo", ctx)
+
+        assert "foo" not in ctx.dest

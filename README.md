@@ -2069,6 +2069,86 @@ result = engine.apply(spec, source={"user_input": "-5"}, dest={})
 
 ---
 
+### `deserialize`
+
+Parse a serialized string into a structured value.
+
+```json
+{
+    "op": "deserialize",
+    "from": "/raw_string",
+    // OR: "value": "..." — inline serialized string (mutually exclusive with "from")
+    "format": "json",
+    // Format: "json", "pretty_json" (alias for json), or "yaml"
+    "path": "/result",
+    // Destination pointer
+    "create": true,
+    // Auto-create intermediate nodes (default: true)
+    "extend": true,
+    // Extend list on append (default: true)
+    "default": {}
+    // Fallback value if source pointer fails or parsing fails
+}
+```
+
+Exactly one of `from` or `value` must be specified.
+
+| Format | Description |
+|--------|-------------|
+| `json` | RFC 8259 JSON — compact and pretty-printed both accepted |
+| `pretty_json` | Alias for `json` |
+| `yaml` | YAML document parsed with `yaml.safe_load` |
+
+The `from` pointer supports all context prefixes (`@:`, `&:`, `!:`, `_:`).
+
+**Example — parse JSON from source:**
+
+```python
+spec = {
+    "op": "deserialize",
+    "from": "/payload",
+    "format": "json",
+    "path": "/data",
+}
+
+result = engine.apply(
+    spec,
+    source={"payload": '{"name": "Alice", "age": 30}'},
+    dest={},
+)
+# → {"data": {"name": "Alice", "age": 30}}
+```
+
+**Example — parse YAML with fallback:**
+
+```python
+spec = {
+    "op": "deserialize",
+    "from": "/raw_config",
+    "format": "yaml",
+    "path": "/config",
+    "default": {},
+}
+
+result = engine.apply(spec, source={}, dest={})
+# → {"config": {}}  (source pointer missing, default used)
+```
+
+**Example — inline value:**
+
+```python
+spec = {
+    "op": "deserialize",
+    "value": "[1, 2, 3]",
+    "format": "json",
+    "path": "/items",
+}
+result = engine.apply(spec, source={}, dest={})
+# → {"items": [1, 2, 3]}
+```
+
+---
+
 ## Extending J-Perm
 
 ### Custom Operations
@@ -2267,6 +2347,143 @@ class PrefixMatcher(ActionMatcher):
         return isinstance(step, dict) and
             step.get("op", "").startswith(self.prefix)
 ```
+
+---
+
+## Compilation
+
+When the same DSL script runs many times with different data, stage processing and matcher resolution repeat identically on every call.  **Compilation** eliminates that cost: run stages and resolve handlers once, capture the result as a `CompiledSpec`, and execute it as many times as needed.
+
+```python
+engine = build_default_engine()
+
+# Compile once
+spec = [
+    {"op": "foreach", "in": "/orders", "as": "order",
+     "do": [{"op": "set", "path": "/results/-", "value": "${&:/order/total}"}]}
+]
+compiled = engine.compile(spec)   # → CompiledSpec
+
+# Run many times with different data
+result_a = compiled.apply(source={"orders": [...]}, dest={"results": []})
+result_b = compiled.apply(source={"orders": [...]}, dest={"results": []})
+```
+
+### What gets compiled
+
+- **Stage processors** (`AssertShorthandProcessor`, `DeleteShorthandProcessor`, `AssignShorthandProcessor`) — run once; their output (normalized steps) is stored.
+- **Handler resolution** — `ActionTypeRegistry.resolve()` is called once per step; the handler list is cached in `CompiledStep.handlers`.
+- **Nested specs** — bodies of compound operations (`foreach.do`, `while.do`, `if.then/else`, `try.do/except/finally`, `$def.body`) are recursively compiled. When a compound handler executes, it calls `compiled_body.run(ctx)` instead of re-running stage processing.
+
+### CompiledSpec API
+
+```python
+compiled = engine.compile(spec)       # → CompiledSpec | None
+
+# Execute
+result = compiled.apply(source=data, dest={})
+result = await compiled.apply_async(source=data, dest={})
+
+# Use inside an existing execution context (e.g. from a custom handler)
+result = compiled.run(ctx)
+
+# Re-attach engine after unpickling
+compiled = pickle.loads(pickle.dumps(compiled))
+compiled.attach_engine(engine)
+result = compiled.apply(source=data, dest={})
+
+# Or pass engine directly
+result = compiled.apply(source=data, dest={}, engine=engine)
+```
+
+`engine.compile()` returns `None` when compilation is not possible (see below).
+
+### Pickle support
+
+`CompiledSpec` and its nested `CompiledStep` objects are picklable.  The engine reference is excluded from pickle because engines contain closures and stateful objects.  After unpickling, re-attach an engine before calling `apply()`:
+
+```python
+import pickle
+
+compiled = engine.compile(spec)
+data     = pickle.dumps(compiled)      # save to disk / send over network
+
+# --- later, in a different process ---
+compiled = pickle.loads(data)
+compiled.attach_engine(engine)
+result = compiled.apply(source=..., dest={})
+```
+
+`compiled.run(ctx)` works without `attach_engine` because it reads the engine from the provided context.
+
+### Context-aware stages
+
+Stage processors and matchers that read from `ctx` at runtime must declare `context_aware = True`.  `engine.compile()` returns `None` for pipelines that contain any such stage:
+
+```python
+from j_perm import StageProcessor
+
+class MyContextAwareStage(StageProcessor):
+    context_aware = True   # opt out of compilation
+
+    def apply(self, steps, ctx):
+        # reads ctx.source — cannot be run at compile time
+        return [s for s in steps if ctx.source.get("enabled")]
+```
+
+Built-in stages (`AssertShorthandProcessor`, `DeleteShorthandProcessor`, `AssignShorthandProcessor`) all have `context_aware = False` (the default), so `build_default_engine()` pipelines are always compilable.
+
+### `exec` and dynamic specs
+
+`ExecHandler` (`op: exec` with `"from"`) loads its action list from the source document at runtime — the nested spec is unknown at compile time.  The outer `exec` step is still compiled (handler resolved), but its body falls back to dynamic dispatch on every run.  This is transparent: `compiled.apply(...)` produces the same result as `engine.apply(...)`.
+
+### The `Compound` interface
+
+Handlers that contain nested DSL specs implement `Compound`:
+
+```python
+from j_perm import Compound, ActionHandler, CompiledSpec
+from typing import Any
+
+class MyCompoundHandler(ActionHandler, Compound):
+    def nested_spec_keys(self, step: Any) -> list[str]:
+        """Tell the compiler which keys hold nested specs."""
+        return ["body"]
+
+    def execute(self, step: Any, ctx) -> Any:
+        return ctx.engine.apply_to_context(step["body"], ctx)
+
+    def execute_compiled(self, step: Any, ctx, nested: dict[str, CompiledSpec]) -> Any:
+        """Execute using pre-compiled nested specs (called by run_compiled)."""
+        compiled_body = nested.get("body")
+        if compiled_body is not None:
+            return compiled_body.run(ctx)
+        return ctx.engine.apply_to_context(step["body"], ctx)
+```
+
+`nested` is a `dict` rather than a single `CompiledSpec` because one step can contain **multiple** named sub-specs.  The key matches the field name in the step dict:
+
+| Operation | Keys in `nested` |
+|-----------|-----------------|
+| `foreach` | `"do"` |
+| `while` | `"do"` |
+| `if` | `"then"`, `"do"`, `"else"` (whichever are present) |
+| `try` | `"do"`, `"except"`, `"finally"` (whichever are present) |
+| `$def` | `"body"`, `"on_failure"` (if defined) |
+
+In `execute_compiled`, look up the key you need with `nested.get(key)`.  If it returns `None` (e.g. the `if` step has no `"else"` branch), fall back to `ctx.engine.apply_to_context`.
+
+Built-in compound handlers: `ForeachHandler`, `WhileHandler`, `IfHandler`, `TryHandler`, `DefHandler`.
+
+### Engine methods
+
+| Method | Description |
+|--------|-------------|
+| `engine.compile(spec)` | Compile a spec. Returns `CompiledSpec` or `None`. |
+| `engine.apply_compiled(compiled, *, source, dest)` | Execute a compiled spec. |
+| `engine.apply_compiled_async(compiled, *, source, dest)` | Async version. |
+| `engine.apply_compiled_to_context(compiled, ctx)` | Run inside an existing context. |
+| `engine.apply_compiled_to_context_async(compiled, ctx)` | Async version. |
 
 ---
 

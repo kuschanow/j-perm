@@ -27,7 +27,6 @@ from __future__ import annotations
 import copy
 import logging
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional, Tuple, Union
 
@@ -37,6 +36,7 @@ _log_values = logging.getLogger("j_perm.values")
 # Metadata key for the language-level execution stack
 _LANG_EXEC_STACK_KEY = "_lang_exec_stack"
 
+
 def _repr_step(step: Any, max_len: Optional[int] = 200) -> str:
     """Compact human-readable representation of a DSL step for the language call stack.
 
@@ -45,6 +45,7 @@ def _repr_step(step: Any, max_len: Optional[int] = 200) -> str:
         max_len: Maximum string length before truncating with ``"..."``.
                  ``None`` disables truncation (shows the full step).
     """
+
     def _trunc(s: str) -> str:
         if max_len is None or len(s) <= max_len:
             return s
@@ -231,7 +232,13 @@ class StageMatcher(ABC):
     """Predicate that decides whether a StageNode should fire.
 
     If a node has ``matcher=None`` it fires unconditionally.
+
+    Set ``context_aware = True`` in a subclass if ``matches`` reads from *ctx*
+    (source, dest, metadata, etc.).  Compilation skips pipelines that contain
+    any context-aware stage matcher or processor.
     """
+
+    context_aware: bool = False
 
     @abstractmethod
     def matches(self, steps: List[Any], ctx: ExecutionContext) -> bool: ...
@@ -241,7 +248,12 @@ class StageProcessor(ABC):
     """Batch transformation of the full step list.
 
     Use cases: shorthand expansion, step validation/rewriting, sorting, …
+
+    Set ``context_aware = True`` in a subclass if ``apply`` reads from *ctx*.
+    Compilation skips pipelines that contain any context-aware stage processor.
     """
+
+    context_aware: bool = False
 
     @abstractmethod
     def apply(self, steps: List[Any], ctx: ExecutionContext) -> List[Any]:
@@ -510,6 +522,48 @@ class AsyncActionHandler(ABC):
         """Run the action asynchronously.  Return the new ``dest``."""
 
 
+class Compound(ABC):
+    """Mixin for ``ActionHandler`` subclasses that contain nested DSL specs.
+
+    Implementing this interface serves two purposes:
+
+    1. **Compilation** — ``Pipeline.compile`` calls ``nested_spec_keys`` to
+       discover which keys inside the step dict hold nested specs, then
+       recursively compiles them.
+
+    2. **Compiled execution** — ``Pipeline.run_compiled`` calls
+       ``execute_compiled`` instead of ``execute``, passing the pre-compiled
+       nested specs so that nested bodies skip stage processing and matcher
+       resolution on every run.
+
+    Handlers that do *not* know their nested specs at compile time (e.g.
+    ``ExecHandler``) should **not** implement this interface.
+    """
+
+    @abstractmethod
+    def nested_spec_keys(self, step: Any) -> List[str]:
+        """Return the keys in *step* whose values are nested DSL specs.
+
+        Only return keys that actually exist in the given step — the compiler
+        will skip missing keys automatically, but being explicit is cleaner.
+        """
+
+    def execute_compiled(
+            self,
+            step: Any,
+            ctx: 'ExecutionContext',
+            nested: dict[str, 'CompiledSpec'],
+    ) -> Any:
+        """Execute *step* using pre-compiled nested specs.
+
+        The default implementation ignores *nested* and falls back to the
+        regular ``execute`` method.  Override in handlers that call
+        ``ctx.engine.apply_to_context`` on nested bodies so they can use
+        ``compiled_body.run(sub_ctx)`` instead.
+        """
+        return self.execute(step, ctx)  # type: ignore[attr-defined]
+
+
 @dataclass
 class ActionNode:
     """Node in the action-type tree.
@@ -645,6 +699,144 @@ class ActionTypeRegistry:
     def nodes(self) -> List[ActionNode]:
         """Return nodes sorted by descending priority."""
         return sorted(self._nodes, key=lambda n: n.priority, reverse=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CompiledStep / CompiledSpec — result of Pipeline.compile()
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@dataclass
+class CompiledStep:
+    """A single step that has been fully resolved during compilation.
+
+    Attributes:
+        step:     Normalised step dict (after all stage processors ran).
+        handlers: Handler instances selected by the matcher tree — already
+                  resolved, no matcher evaluation needed at run time.
+        nested:   Pre-compiled sub-specs for handlers that implement
+                  :class:`Compound` (e.g. the ``do`` body of a ``foreach``).
+    """
+
+    step: Any
+    handlers: List[ActionHandler]
+    nested: dict[str, 'CompiledSpec'] = field(default_factory=dict)
+
+
+class CompiledSpec:
+    """A compiled DSL script — the result of :meth:`Engine.compile`.
+
+    ``CompiledSpec`` is a self-contained, reusable entity.  It holds the
+    normalised steps and pre-resolved handlers for the entire script,
+    including recursively compiled nested specs for compound operations
+    (``foreach``, ``while``, ``if``, ``try``, ``$def``).
+
+    The object keeps a strong reference to the *source_spec* it was compiled
+    from so that the original Python objects stay alive (relevant when
+    nested-body references are compared by identity during execution).
+
+    Engine reference
+    ----------------
+    ``_engine`` is the :class:`Engine` instance that compiled this spec.
+    ``apply`` / ``apply_async`` delegate to it.  The engine reference is
+    *excluded* from pickle so the object survives serialisation; after
+    unpickling you must re-attach an engine::
+
+        restored = pickle.loads(data)
+        restored.attach_engine(engine)
+        result = restored.apply(source=..., dest=...)
+
+    Or pass *engine* directly to ``apply``::
+
+        result = restored.apply(source=..., dest=..., engine=engine)
+
+    ``run(ctx)`` does *not* need ``_engine`` — it uses ``ctx.engine`` and
+    therefore works even after unpickling (provided ctx carries a live engine).
+    """
+
+    def __init__(
+            self,
+            steps: List[CompiledStep],
+            source_spec: Any,
+            engine: Optional['Engine'] = None,
+    ) -> None:
+        self.steps = steps
+        self._source_spec = source_spec
+        self._engine = engine
+
+    # -- execution --------------------------------------------------------------
+
+    def run(self, ctx: 'ExecutionContext') -> Any:
+        """Run this compiled spec inside an existing execution context.
+
+        Uses ``ctx.engine`` rather than ``self._engine``, so this method works
+        even after unpickling (before :meth:`attach_engine` is called).
+
+        Returns a deep copy of ``ctx.dest`` after execution.
+        """
+        ctx.engine.main_pipeline.run_compiled(self, ctx)
+        return copy.deepcopy(ctx.dest)
+
+    def apply(
+            self,
+            *,
+            source: Any,
+            dest: Any,
+            engine: Optional['Engine'] = None,
+    ) -> Any:
+        """Execute the compiled script with the given *source* and *dest*.
+
+        Args:
+            source: Read-only input document.
+            dest:   Starting destination document (deep-copied before use).
+            engine: Override the stored engine.  Required if the object was
+                    unpickled without calling :meth:`attach_engine` first.
+
+        Returns:
+            Deep copy of the final ``dest`` after execution.
+        """
+        eng = engine or self._engine
+        if eng is None:
+            raise RuntimeError(
+                "CompiledSpec has no engine attached. "
+                "Call attach_engine() or pass engine= to apply()."
+            )
+        return eng.apply_compiled(self, source=source, dest=dest)
+
+    async def apply_async(
+            self,
+            *,
+            source: Any,
+            dest: Any,
+            engine: Optional['Engine'] = None,
+    ) -> Any:
+        """Async version of :meth:`apply`."""
+        eng = engine or self._engine
+        if eng is None:
+            raise RuntimeError(
+                "CompiledSpec has no engine attached. "
+                "Call attach_engine() or pass engine= to apply_async()."
+            )
+        return await eng.apply_compiled_async(self, source=source, dest=dest)
+
+    def attach_engine(self, engine: 'Engine') -> 'CompiledSpec':
+        """Set the engine reference and return *self* for chaining."""
+        self._engine = engine
+        return self
+
+    # -- pickle support ---------------------------------------------------------
+
+    def __getstate__(self) -> dict:
+        return {'steps': self.steps, '_source_spec': self._source_spec}
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
+        self._engine = None
+
+    # -- repr -------------------------------------------------------------------
+
+    def __repr__(self) -> str:
+        return f"CompiledSpec({len(self.steps)} steps)"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -813,6 +1005,153 @@ class Pipeline:
                     if lang_stack is not None:
                         lang_stack.pop()
 
+    # -- compilation ------------------------------------------------------------
+
+    def compile(self, spec: Any, ctx: 'ExecutionContext') -> Optional['CompiledSpec']:
+        """Compile *spec* into a :class:`CompiledSpec`.
+
+        Runs all stage processors once (with the provided *ctx*) to normalise
+        the step list, then resolves handlers for each step via the registry.
+        Recursively compiles nested specs for handlers that implement
+        :class:`Compound`.
+
+        Returns ``None`` if any stage matcher or processor in this pipeline has
+        ``context_aware = True`` (compilation requires context-independent stages).
+        """
+        for node in self.stages.nodes():
+            if node.matcher is not None and getattr(node.matcher, 'context_aware', False):
+                return None
+            if node.processor is not None and getattr(node.processor, 'context_aware', False):
+                return None
+
+        original_spec = spec
+        steps: List[Any] = spec if isinstance(spec, list) else [spec]
+        steps = self.stages.run_all(steps, ctx)
+
+        compiled_steps: List[CompiledStep] = []
+        for step in steps:
+            handlers = self.registry.resolve(step)
+            if not handlers:
+                raise ValueError(f"unhandled step during compilation: {step!r}")
+
+            nested: dict[str, CompiledSpec] = {}
+            for handler in handlers:
+                if isinstance(handler, Compound):
+                    for key in handler.nested_spec_keys(step):
+                        if isinstance(step, dict) and key in step and step[key] is not None:
+                            sub = self.compile(step[key], ctx)
+                            if sub is not None:
+                                nested[key] = sub
+
+            compiled_steps.append(CompiledStep(step=step, handlers=handlers, nested=nested))
+
+        return CompiledSpec(steps=compiled_steps, source_spec=original_spec)
+
+    def run_compiled(self, compiled: 'CompiledSpec', ctx: 'ExecutionContext') -> None:
+        """Execute a :class:`CompiledSpec` — skip stages and matcher resolution.
+
+        Semantics are identical to :meth:`run` except that stage processors and
+        ``registry.resolve`` are bypassed (handlers were resolved at compile time).
+
+        .. warning::
+            Middlewares that change the dispatch key of a step (``op``, ``$def``,
+            ``$func``, etc.) are incompatible with compiled pipelines.
+        """
+        for compiled_step in compiled.steps:
+            step = compiled_step.step
+
+            for mw in sorted(self._middlewares, key=lambda m: m.priority, reverse=True):
+                step = mw.process(step, ctx)
+
+            for handler in compiled_step.handlers:
+                ctx.metadata['_operation_count'] = ctx.metadata.get('_operation_count', 0) + 1
+                max_ops = getattr(ctx.engine, 'max_operations', float('inf'))
+                if ctx.metadata['_operation_count'] > max_ops:
+                    raise RuntimeError(
+                        f"Operation limit exceeded: {ctx.metadata['_operation_count']} operations executed, "
+                        f"maximum allowed is {max_ops}"
+                    )
+
+                if self.track_execution:
+                    lang_stack = ctx.metadata.setdefault(_LANG_EXEC_STACK_KEY, [])
+                    repr_max = getattr(ctx.engine, 'trace_repr_max', 200)
+                    frame = _repr_step(step, max_len=repr_max)
+                    lang_stack.append(frame)
+                    if getattr(ctx.engine, 'trace_logging', False):
+                        _log.debug("%s→ %s", "  " * (len(lang_stack) - 1), frame)
+                else:
+                    lang_stack = None
+
+                try:
+                    if isinstance(handler, Compound) and compiled_step.nested:
+                        ctx.dest = handler.execute_compiled(step, ctx, compiled_step.nested)
+                    else:
+                        ctx.dest = handler.execute(step, ctx)
+                except PipelineSignal as sig:
+                    sig.handle(ctx)
+                except ControlFlowSignal:
+                    raise
+                except Exception as e:
+                    if lang_stack is not None and not hasattr(e, '_j_perm_lang_stack'):
+                        e._j_perm_lang_stack = list(lang_stack)
+                    raise
+                finally:
+                    if lang_stack is not None:
+                        lang_stack.pop()
+
+    async def run_compiled_async(self, compiled: 'CompiledSpec', ctx: 'ExecutionContext') -> None:
+        """Async version of :meth:`run_compiled`."""
+        for compiled_step in compiled.steps:
+            step = compiled_step.step
+
+            for mw in sorted(self._middlewares, key=lambda m: m.priority, reverse=True):
+                if isinstance(mw, AsyncMiddleware):
+                    step = await mw.process(step, ctx)
+                else:
+                    step = mw.process(step, ctx)
+
+            for handler in compiled_step.handlers:
+                ctx.metadata['_operation_count'] = ctx.metadata.get('_operation_count', 0) + 1
+                max_ops = getattr(ctx.engine, 'max_operations', float('inf'))
+                if ctx.metadata['_operation_count'] > max_ops:
+                    raise RuntimeError(
+                        f"Operation limit exceeded: {ctx.metadata['_operation_count']} operations executed, "
+                        f"maximum allowed is {max_ops}"
+                    )
+
+                if self.track_execution:
+                    lang_stack = ctx.metadata.setdefault(_LANG_EXEC_STACK_KEY, [])
+                    repr_max = getattr(ctx.engine, 'trace_repr_max', 200)
+                    frame = _repr_step(step, max_len=repr_max)
+                    lang_stack.append(frame)
+                    if getattr(ctx.engine, 'trace_logging', False):
+                        _log.debug("%s→ %s", "  " * (len(lang_stack) - 1), frame)
+                else:
+                    lang_stack = None
+
+                try:
+                    if isinstance(handler, Compound) and compiled_step.nested:
+                        if isinstance(handler, AsyncActionHandler):
+                            ctx.dest = await handler.execute(step, ctx)
+                        else:
+                            ctx.dest = handler.execute_compiled(step, ctx, compiled_step.nested)
+                    else:
+                        if isinstance(handler, AsyncActionHandler):
+                            ctx.dest = await handler.execute(step, ctx)
+                        else:
+                            ctx.dest = handler.execute(step, ctx)
+                except PipelineSignal as sig:
+                    sig.handle(ctx)
+                except ControlFlowSignal:
+                    raise
+                except Exception as e:
+                    if lang_stack is not None and not hasattr(e, '_j_perm_lang_stack'):
+                        e._j_perm_lang_stack = list(lang_stack)
+                    raise
+                finally:
+                    if lang_stack is not None:
+                        lang_stack.pop()
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # UnescapeRule — post-stabilisation escape cleanup
@@ -908,6 +1247,97 @@ class Engine:
     def register_custom_function(self, name: str, func: Callable[[Any], Any]) -> None:
         """Add a custom function as an Engine method (callable from handlers)."""
         setattr(self, name, func)
+
+    # -- compilation --------------------------------------------------------
+
+    def compile(self, spec: Any) -> Optional[CompiledSpec]:
+        """Compile *spec* into a reusable :class:`CompiledSpec`.
+
+        Runs all stage processors once and resolves handlers for each step.
+        Nested specs inside compound operations (``foreach``, ``while``,
+        ``if``, ``try``, ``$def``) are compiled recursively.
+
+        Returns ``None`` if the main pipeline contains a context-aware stage
+        (i.e. a stage that reads from the execution context at runtime and
+        cannot safely be evaluated with a dummy context at compile time).
+
+        The returned :class:`CompiledSpec` stores a reference to this engine
+        and can be executed directly::
+
+            compiled = engine.compile(spec)
+            result = compiled.apply(source=data, dest={})
+        """
+        dummy_ctx = ExecutionContext(source={}, dest={}, engine=self)
+        compiled = self.main_pipeline.compile(spec, dummy_ctx)
+        if compiled is not None:
+            compiled._engine = self
+        return compiled
+
+    def apply_compiled(self, compiled: CompiledSpec, *, source: Any, dest: Any) -> Any:
+        """Execute a :class:`CompiledSpec` with the given *source* and *dest*.
+
+        Equivalent to :meth:`apply` but skips stage processing and matcher
+        resolution (they were resolved at compile time).
+
+        *source* is normalized (tuples → lists); *dest* is deep-copied.
+        Returns a deep copy of the final ``dest``.
+        """
+        ctx = ExecutionContext(
+            source=_tuples_to_lists(source),
+            dest=copy.deepcopy(dest),
+            engine=self,
+        )
+        try:
+            self.main_pipeline.run_compiled(compiled, ctx)
+        except Exception as e:
+            if not isinstance(e, (PipelineSignal, ControlFlowSignal)):
+                lang_stack = getattr(e, '_j_perm_lang_stack', None)
+                if lang_stack:
+                    _log.error(
+                        "j-perm execution failed: %s: %s\n"
+                        "Language call stack (innermost last):\n%s",
+                        type(e).__name__, e,
+                        _format_lang_stack(lang_stack),
+                    )
+            raise
+        return copy.deepcopy(ctx.dest)
+
+    async def apply_compiled_async(self, compiled: CompiledSpec, *, source: Any, dest: Any) -> Any:
+        """Async version of :meth:`apply_compiled`."""
+        ctx = ExecutionContext(
+            source=_tuples_to_lists(source),
+            dest=copy.deepcopy(dest),
+            engine=self,
+        )
+        try:
+            await self.main_pipeline.run_compiled_async(compiled, ctx)
+        except Exception as e:
+            if not isinstance(e, (PipelineSignal, ControlFlowSignal)):
+                lang_stack = getattr(e, '_j_perm_lang_stack', None)
+                if lang_stack:
+                    _log.error(
+                        "j-perm execution failed: %s: %s\n"
+                        "Language call stack (innermost last):\n%s",
+                        type(e).__name__, e,
+                        _format_lang_stack(lang_stack),
+                    )
+            raise
+        return copy.deepcopy(ctx.dest)
+
+    def apply_compiled_to_context(self, compiled: CompiledSpec, ctx: 'ExecutionContext') -> Any:
+        """Like :meth:`apply_to_context`, but uses a :class:`CompiledSpec`.
+
+        Runs ``main_pipeline.run_compiled(compiled, ctx)`` and returns a deep
+        copy of the resulting ``ctx.dest``.  The caller is responsible for
+        providing a properly initialised context.
+        """
+        self.main_pipeline.run_compiled(compiled, ctx)
+        return copy.deepcopy(ctx.dest)
+
+    async def apply_compiled_to_context_async(self, compiled: CompiledSpec, ctx: 'ExecutionContext') -> Any:
+        """Async version of :meth:`apply_compiled_to_context`."""
+        await self.main_pipeline.run_compiled_async(compiled, ctx)
+        return copy.deepcopy(ctx.dest)
 
     # -- public API ---------------------------------------------------------
 

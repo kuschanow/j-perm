@@ -14,7 +14,11 @@ from j_perm import (
     ActionMatcher,
     ActionHandler,
     PointerResolver,
+    PipelineSignal,
+    UnescapeRule,
+    ValueProcessor,
 )
+from j_perm.core import _repr_step, _format_lang_stack
 from j_perm.processors.pointer_processor import PointerProcessor
 
 
@@ -564,3 +568,652 @@ class TestEngine:
             "from_dest": "dest_value",
             "existing": "dest_value",
         }
+
+
+class TestReprStep:
+    """Test _repr_step private helper."""
+
+    def test_repr_step_dict(self):
+        """Dict step formats as key-value pairs."""
+        result = _repr_step({"op": "set", "path": "/x"})
+        assert "'op'" in result and "'set'" in result
+
+    def test_repr_step_non_dict_triggers_line_55(self):
+        """Non-dict step uses repr() directly."""
+        result = _repr_step("$break")
+        assert result == repr("$break")
+
+    def test_repr_step_truncation_triggers_line_51(self):
+        """Long repr is truncated to max_len with '...'."""
+        long_val = "x" * 300
+        result = _repr_step({"k": long_val}, max_len=20)
+        assert result.endswith("...")
+        assert len(result) == 20
+
+    def test_repr_step_no_truncation_when_max_len_none(self):
+        """max_len=None disables truncation."""
+        step = {"op": "set", "path": "/x", "value": "short"}
+        result = _repr_step(step, max_len=None)
+        assert "..." not in result
+
+    def test_repr_step_exception_triggers_lines_66_67(self):
+        """Exception during repr returns '<unprintable step>'."""
+
+        class Unrepresentable:
+            def __repr__(self):
+                raise RuntimeError("cannot repr")
+
+        step = {"key": Unrepresentable()}
+        result = _repr_step(step)
+        assert result == "<unprintable step>"
+
+    def test_repr_step_list_value_shows_item_count(self):
+        """List value is shown as '[N items]'."""
+        result = _repr_step({"items": [1, 2, 3]})
+        assert "[3 items]" in result
+
+    def test_repr_step_large_dict_value_shown_as_ellipsis(self):
+        """Large nested dict is shown as '{...}'."""
+        result = _repr_step({"nested": {"a" * 30: "b" * 30}})
+        assert "{...}" in result
+
+
+class TestFormatLangStack:
+    """Test _format_lang_stack private helper."""
+
+    def test_empty_frames_triggers_line_73(self):
+        """Empty frame list returns '(empty)' message."""
+        result = _format_lang_stack([])
+        assert "(empty)" in result
+
+    def test_non_empty_frames(self):
+        """Non-empty frames are numbered."""
+        result = _format_lang_stack(["frame1", "frame2"])
+        assert "#1" in result
+        assert "frame1" in result
+
+
+class TestValueProcessorExistsBaseMethod:
+    """Test ValueProcessor.exists() default base implementation (lines 221-222)."""
+
+    def test_base_exists_uses_resolve_and_resolver(self):
+        """ValueProcessor.exists() base method calls resolve() and resolver.exists()."""
+
+        class MinimalProcessor(ValueProcessor):
+            def resolve(self, path, ctx):
+                return path, ctx.source
+
+            def get(self, pointer, ctx):
+                path, data = self.resolve(pointer, ctx)
+                return ctx.engine.resolver.get(path, data)
+
+            def set(self, pointer, ctx, value):
+                ctx.engine.resolver.set(pointer, ctx.dest, value)
+
+            def delete(self, pointer, ctx, ignore_missing=False):
+                ctx.engine.resolver.delete(pointer, ctx.dest)
+
+        processor = MinimalProcessor()
+
+        class DummyHandler(ActionHandler):
+            def execute(self, step, ctx):
+                return ctx.dest
+
+        class AlwaysMatcher(ActionMatcher):
+            def matches(self, step):
+                return True
+
+        registry = ActionTypeRegistry()
+        registry.register(ActionNode("dummy", 10, AlwaysMatcher(), handler=DummyHandler()))
+        pipeline = Pipeline(registry=registry)
+        engine = Engine(
+            resolver=PointerResolver(),
+            processor=processor,
+            main_pipeline=pipeline,
+        )
+
+        ctx = ExecutionContext(source={"key": "value"}, dest={}, engine=engine)
+        assert processor.exists("/key", ctx) is True
+        assert processor.exists("/missing", ctx) is False
+
+
+class TestStageRegistryExtended:
+    """Extended tests for StageRegistry."""
+
+    def test_register_group_creates_node_with_children(self):
+        """register_group() mounts a sub-registry as a group node (line 315)."""
+        executed = []
+
+        class RecordStage(StageProcessor):
+            def __init__(self, name):
+                self.name = name
+
+            def apply(self, steps, ctx):
+                executed.append(self.name)
+                return steps
+
+        child_reg = StageRegistry()
+        child_reg.register(StageNode("child", 10, processor=RecordStage("child")))
+
+        parent_reg = StageRegistry()
+        parent_reg.register_group("group", child_reg, priority=5)
+
+        ctx = ExecutionContext(source={}, dest={}, engine=object())
+        parent_reg.run_all([], ctx)
+
+        assert "child" in executed
+
+    def test_run_all_with_children_executes_child_first(self):
+        """run_all() with children node runs child registry first (line 331)."""
+        executed = []
+
+        class RecordStage(StageProcessor):
+            def __init__(self, name):
+                self.name = name
+
+            def apply(self, steps, ctx):
+                executed.append(self.name)
+                return steps
+
+        child_reg = StageRegistry()
+        child_reg.register(StageNode("child_stage", 10, processor=RecordStage("child_stage")))
+
+        parent_reg = StageRegistry()
+        parent_node = StageNode(
+            name="parent_node",
+            priority=10,
+            processor=RecordStage("parent_stage"),
+            children=child_reg,
+        )
+        parent_reg.register(parent_node)
+
+        ctx = ExecutionContext(source={}, dest={}, engine=object())
+        parent_reg.run_all([], ctx)
+
+        assert executed == ["child_stage", "parent_stage"]
+
+    def test_nodes_returns_sorted_list(self):
+        """nodes() returns stages sorted by priority (line 340)."""
+        registry = StageRegistry()
+        registry.register(StageNode("low", priority=1, processor=None))
+        registry.register(StageNode("high", priority=100, processor=None))
+        registry.register(StageNode("mid", priority=50, processor=None))
+
+        nodes = registry.nodes()
+        priorities = [n.priority for n in nodes]
+        assert priorities == sorted(priorities, reverse=True)
+
+
+class TestActionTypeRegistryExtended:
+    """Extended tests for ActionTypeRegistry."""
+
+    def test_register_group_with_children(self):
+        """register_group() mounts sub-registry as children (line 583)."""
+
+        class AlwaysMatcher(ActionMatcher):
+            def matches(self, step):
+                return True
+
+        class DummyHandler(ActionHandler):
+            def execute(self, step, ctx):
+                ctx.dest["child"] = True
+                return ctx.dest
+
+        child_reg = ActionTypeRegistry()
+        child_reg.register(ActionNode("child", 10, AlwaysMatcher(), handler=DummyHandler()))
+
+        parent_reg = ActionTypeRegistry()
+        parent_reg.register_group("group", child_reg, matcher=AlwaysMatcher())
+
+        handlers = parent_reg.resolve({})
+        assert len(handlers) == 1
+
+    def test_resolve_with_children_extends_handlers(self):
+        """resolve() with children node extends handler list (lines 614-617)."""
+
+        class AlwaysMatcher(ActionMatcher):
+            def matches(self, step):
+                return True
+
+        class H1(ActionHandler):
+            def execute(self, step, ctx):
+                return ctx.dest
+
+        child_reg = ActionTypeRegistry()
+        child_reg.register(ActionNode("child", 10, AlwaysMatcher(), handler=H1()))
+
+        parent_reg = ActionTypeRegistry()
+        parent_reg.register(ActionNode(
+            "parent", 10,
+            AlwaysMatcher(),
+            children=child_reg,
+            exclusive=True,
+        ))
+
+        handlers = parent_reg.resolve({})
+        assert len(handlers) == 1
+
+    def test_run_all_executes_all_matching_handlers(self):
+        """run_all() executes all matching handlers in priority order (lines 635-641)."""
+        executed = []
+
+        class AlwaysMatcher(ActionMatcher):
+            def matches(self, step):
+                return True
+
+        class H1(ActionHandler):
+            def execute(self, step, ctx):
+                executed.append("h1")
+                ctx.dest["h1"] = True
+                return ctx.dest
+
+        class H2(ActionHandler):
+            def execute(self, step, ctx):
+                executed.append("h2")
+                ctx.dest["h2"] = True
+                return ctx.dest
+
+        registry = ActionTypeRegistry()
+        registry.register(ActionNode("h1", 100, AlwaysMatcher(), handler=H1(), exclusive=False))
+        registry.register(ActionNode("h2", 50, AlwaysMatcher(), handler=H2(), exclusive=False))
+
+        ctx = ExecutionContext(source={}, dest={}, engine=object())
+        registry.run_all({}, ctx)
+
+        assert executed == ["h1", "h2"]
+        assert ctx.dest == {"h1": True, "h2": True}
+
+    def test_run_all_with_children(self):
+        """run_all() runs children recursively (lines 637-638)."""
+        executed = []
+
+        class AlwaysMatcher(ActionMatcher):
+            def matches(self, step):
+                return True
+
+        class ChildHandler(ActionHandler):
+            def execute(self, step, ctx):
+                executed.append("child")
+                return ctx.dest
+
+        child_reg = ActionTypeRegistry()
+        child_reg.register(ActionNode("c", 10, AlwaysMatcher(), handler=ChildHandler()))
+
+        parent_reg = ActionTypeRegistry()
+        parent_reg.register(ActionNode("p", 10, AlwaysMatcher(), children=child_reg))
+
+        ctx = ExecutionContext(source={}, dest={}, engine=object())
+        parent_reg.run_all({}, ctx)
+
+        assert "child" in executed
+
+    def test_nodes_returns_sorted_list(self):
+        """nodes() returns handlers sorted by priority (line 647)."""
+        registry = ActionTypeRegistry()
+
+        class M(ActionMatcher):
+            def matches(self, step):
+                return False
+
+        registry.register(ActionNode("low", 1, M()))
+        registry.register(ActionNode("high", 100, M()))
+        registry.register(ActionNode("mid", 50, M()))
+
+        nodes = registry.nodes()
+        priorities = [n.priority for n in nodes]
+        assert priorities == sorted(priorities, reverse=True)
+
+
+class TestPipelineMiddleware:
+    """Test Pipeline middleware support."""
+
+    def test_register_middleware_and_execute(self):
+        """register_middleware() adds middleware that transforms steps (lines 693, 711)."""
+        from j_perm.core import Middleware
+
+        transformed = []
+
+        class UpperMiddleware(Middleware):
+            name = "upper"
+            priority = 10
+
+            def process(self, step, ctx):
+                transformed.append(step)
+                return step
+
+        class TestMatcher(ActionMatcher):
+            def matches(self, step):
+                return step.get("op") == "test"
+
+        class TestHandler(ActionHandler):
+            def execute(self, step, ctx):
+                ctx.dest["done"] = True
+                return ctx.dest
+
+        registry = ActionTypeRegistry()
+        registry.register(ActionNode("test", 10, TestMatcher(), handler=TestHandler()))
+
+        pipeline = Pipeline(registry=registry)
+        pipeline.register_middleware(UpperMiddleware())
+
+        engine = object()
+        ctx = ExecutionContext(source={}, dest={}, engine=engine)
+        pipeline.run({"op": "test"}, ctx)
+
+        assert ctx.dest == {"done": True}
+        assert len(transformed) == 1
+
+
+class TestEngineExtended:
+    """Extended tests for Engine."""
+
+    def _make_engine(self, handler_cls=None, *, track_execution=True):
+        """Helper to build a minimal engine."""
+        class AlwaysMatcher(ActionMatcher):
+            def matches(self, step):
+                return True
+
+        if handler_cls is None:
+            class handler_cls(ActionHandler):
+                def execute(self, step, ctx):
+                    ctx.dest["done"] = True
+                    return ctx.dest
+
+        registry = ActionTypeRegistry()
+        registry.register(ActionNode("h", 10, AlwaysMatcher(), handler=handler_cls()))
+        pipeline = Pipeline(registry=registry, track_execution=track_execution)
+        return Engine(
+            resolver=PointerResolver(),
+            processor=PointerProcessor(),
+            main_pipeline=pipeline,
+        )
+
+    def test_custom_functions_in_init(self):
+        """Engine.__init__ with custom_functions sets them as attributes (line 900)."""
+        my_func = lambda x: x * 2  # noqa: E731
+        engine = self._make_engine()
+        engine2 = Engine(
+            resolver=PointerResolver(),
+            processor=PointerProcessor(),
+            main_pipeline=engine.main_pipeline,
+            custom_functions={"my_func": my_func},
+        )
+        assert hasattr(engine2, "my_func")
+        assert engine2.my_func(5) == 10
+
+    def test_register_pipeline(self):
+        """register_pipeline() makes pipeline available via run_pipeline (line 906)."""
+
+        class SetHandler(ActionHandler):
+            def execute(self, step, ctx):
+                ctx.dest["from_named"] = True
+                return ctx.dest
+
+        class AlwaysMatcher(ActionMatcher):
+            def matches(self, step):
+                return True
+
+        named_registry = ActionTypeRegistry()
+        named_registry.register(ActionNode("set", 10, AlwaysMatcher(), handler=SetHandler()))
+        named_pipeline = Pipeline(registry=named_registry)
+
+        engine = self._make_engine()
+        engine.register_pipeline("named", named_pipeline)
+
+        ctx = ExecutionContext(source={}, dest={}, engine=engine)
+        result = engine.run_pipeline("named", {}, ctx)
+        assert result.get("from_named") is True
+
+    def test_register_custom_function(self):
+        """register_custom_function() sets function as engine attribute (line 910)."""
+        engine = self._make_engine()
+        engine.register_custom_function("double", lambda x: x * 2)
+        assert engine.double(7) == 14
+
+    def test_run_pipeline_executes_named_pipeline(self):
+        """run_pipeline() runs named pipeline with isolated dest (lines 998-1028)."""
+
+        class SetHandler(ActionHandler):
+            def execute(self, step, ctx):
+                ctx.dest["result"] = 42
+                return ctx.dest
+
+        class AlwaysMatcher(ActionMatcher):
+            def matches(self, step):
+                return True
+
+        named_registry = ActionTypeRegistry()
+        named_registry.register(ActionNode("set", 10, AlwaysMatcher(), handler=SetHandler()))
+        named_pipeline = Pipeline(registry=named_registry)
+
+        engine = self._make_engine()
+        engine.register_pipeline("compute", named_pipeline)
+
+        ctx = ExecutionContext(source={}, dest={"original": True}, engine=engine)
+        result = engine.run_pipeline("compute", {}, ctx)
+
+        assert result == {"original": True, "result": 42}
+        assert ctx.dest == {"original": True}  # original untouched
+
+    def test_run_pipeline_raises_for_unknown_pipeline(self):
+        """run_pipeline() raises KeyError for unknown pipeline name."""
+        engine = self._make_engine()
+        ctx = ExecutionContext(source={}, dest={}, engine=engine)
+
+        with pytest.raises(KeyError):
+            engine.run_pipeline("nonexistent", {}, ctx)
+
+    def test_run_pipeline_propagates_exceptions(self):
+        """run_pipeline() propagates exceptions from the named pipeline (lines 1017-1028)."""
+
+        class FailHandler(ActionHandler):
+            def execute(self, step, ctx):
+                raise ValueError("pipeline error")
+
+        class AlwaysMatcher(ActionMatcher):
+            def matches(self, step):
+                return True
+
+        fail_registry = ActionTypeRegistry()
+        fail_registry.register(ActionNode("fail", 10, AlwaysMatcher(), handler=FailHandler()))
+        fail_pipeline = Pipeline(registry=fail_registry, track_execution=True)
+
+        engine = self._make_engine()
+        engine.register_pipeline("failing", fail_pipeline)
+
+        ctx = ExecutionContext(source={}, dest={}, engine=engine)
+        with pytest.raises(ValueError, match="pipeline error"):
+            engine.run_pipeline("failing", {}, ctx)
+
+    def test_trace_logging_calls_repr_step(self):
+        """trace_logging=True emits debug log for each step (line 733)."""
+        import logging
+        from j_perm import build_default_engine
+
+        engine = build_default_engine(trace_logging=True, trace_repr_max=50)
+        log = logging.getLogger("j_perm")
+        original_level = log.level
+        log.setLevel(logging.DEBUG)
+        try:
+            result = engine.apply(
+                {"op": "set", "path": "/x", "value": 42},
+                source={},
+                dest={},
+            )
+            assert result == {"x": 42}
+        finally:
+            log.setLevel(original_level)
+
+    def test_trace_repr_max_truncation(self):
+        """Trace repr is truncated when trace_repr_max is small (line 51 via pipeline)."""
+        from j_perm import build_default_engine
+
+        engine = build_default_engine(trace_logging=True, trace_repr_max=10)
+        # Run any spec — _repr_step is called, truncation may occur if step repr > 10 chars
+        result = engine.apply(
+            {"op": "set", "path": "/k", "value": "v"},
+            source={}, dest={},
+        )
+        assert result == {"k": "v"}
+
+    def test_process_value_recursion_error(self):
+        """process_value() raises RecursionError when max_depth exceeded (line 1114)."""
+
+        class AlwaysMatcher(ActionMatcher):
+            def matches(self, step):
+                return True
+
+        class OscillateHandler(ActionHandler):
+            """Always returns a different value to prevent stabilization."""
+
+            def execute(self, step, ctx):
+                if isinstance(ctx.dest, int):
+                    return ctx.dest + 1
+                return 0
+
+        value_registry = ActionTypeRegistry()
+        value_registry.register(
+            ActionNode("oscillate", 10, AlwaysMatcher(), handler=OscillateHandler())
+        )
+        value_pipeline = Pipeline(registry=value_registry)
+
+        class MainHandler(ActionHandler):
+            def execute(self, step, ctx):
+                return ctx.dest
+
+        main_registry = ActionTypeRegistry()
+        main_registry.register(ActionNode("main", 10, AlwaysMatcher(), handler=MainHandler()))
+        main_pipeline = Pipeline(registry=main_registry)
+
+        engine = Engine(
+            resolver=PointerResolver(),
+            processor=PointerProcessor(),
+            main_pipeline=main_pipeline,
+            value_pipeline=value_pipeline,
+            value_max_depth=5,
+        )
+
+        ctx = ExecutionContext(source={}, dest={}, engine=engine)
+        with pytest.raises(RecursionError):
+            engine.process_value(0, ctx)
+
+    def test_run_pipeline_debug_logging(self):
+        """run_pipeline() emits debug log when logger is at DEBUG level (lines 1013-1014)."""
+        import logging
+
+        class SetHandler(ActionHandler):
+            def execute(self, step, ctx):
+                ctx.dest["r"] = True
+                return ctx.dest
+
+        class AlwaysMatcher(ActionMatcher):
+            def matches(self, step):
+                return True
+
+        named_reg = ActionTypeRegistry()
+        named_reg.register(ActionNode("s", 10, AlwaysMatcher(), handler=SetHandler()))
+        named_pipeline = Pipeline(registry=named_reg)
+
+        engine = self._make_engine()
+        engine.register_pipeline("dbg_pl", named_pipeline)
+
+        log = logging.getLogger("j_perm.pipeline.dbg_pl")
+        original_level = log.level
+        log.setLevel(logging.DEBUG)
+        try:
+            ctx = ExecutionContext(source={}, dest={}, engine=engine)
+            result = engine.run_pipeline("dbg_pl", {}, ctx)
+            assert result.get("r") is True
+        finally:
+            log.setLevel(original_level)
+
+    def test_process_value_pipeline_signal_from_stage(self):
+        """process_value() catches PipelineSignal raised from a stage (lines 1100-1102)."""
+
+        class AlwaysMatcher(ActionMatcher):
+            def matches(self, step):
+                return True
+
+        class IdentityHandler(ActionHandler):
+            def execute(self, step, ctx):
+                return ctx.dest
+
+        class SignalStage(StageProcessor):
+            """Stage that raises PipelineSignal to break the stabilization loop."""
+            def apply(self, steps, ctx):
+                class StopSignal(PipelineSignal):
+                    def handle(self, ctx):
+                        ctx.dest = "stopped"
+                raise StopSignal()
+
+        value_reg = ActionTypeRegistry()
+        value_reg.register(ActionNode("id", 10, AlwaysMatcher(), handler=IdentityHandler()))
+        value_stages = StageRegistry()
+        value_stages.register(StageNode("stop", 10, processor=SignalStage()))
+        value_pipeline = Pipeline(registry=value_reg, stages=value_stages)
+
+        main_reg = ActionTypeRegistry()
+        main_reg.register(ActionNode("m", 10, AlwaysMatcher(), handler=IdentityHandler()))
+        main_pipeline = Pipeline(registry=main_reg)
+
+        engine = Engine(
+            resolver=PointerResolver(),
+            processor=PointerProcessor(),
+            main_pipeline=main_pipeline,
+            value_pipeline=value_pipeline,
+        )
+
+        ctx = ExecutionContext(source={}, dest={}, engine=engine)
+        result = engine.process_value("input", ctx)
+        # PipelineSignal from stage breaks the loop early; current stays at initial value
+        # (signal.handle() is NOT called because the signal escaped from stages, not from handler)
+        assert result == "input"
+
+    def test_process_value_trace_logging(self):
+        """process_value() logs trace when _log_values is at DEBUG level (line 1106)."""
+        import logging
+
+        class AlwaysMatcher(ActionMatcher):
+            def matches(self, step):
+                return True
+
+        # Counter to track iterations
+        counter = [0]
+
+        class StabilizeHandler(ActionHandler):
+            def execute(self, step, ctx):
+                counter[0] += 1
+                if counter[0] == 1:
+                    return "transformed"
+                return ctx.dest
+
+        value_registry = ActionTypeRegistry()
+        value_registry.register(
+            ActionNode("v", 10, AlwaysMatcher(), handler=StabilizeHandler())
+        )
+        value_pipeline = Pipeline(registry=value_registry)
+
+        class MainHandler(ActionHandler):
+            def execute(self, step, ctx):
+                return ctx.dest
+
+        main_registry = ActionTypeRegistry()
+        main_registry.register(ActionNode("main", 10, AlwaysMatcher(), handler=MainHandler()))
+        main_pipeline = Pipeline(registry=main_registry)
+
+        engine = Engine(
+            resolver=PointerResolver(),
+            processor=PointerProcessor(),
+            main_pipeline=main_pipeline,
+            value_pipeline=value_pipeline,
+        )
+
+        log = logging.getLogger("j_perm.values")
+        original_level = log.level
+        log.setLevel(logging.DEBUG)
+        try:
+            ctx = ExecutionContext(source={}, dest={}, engine=engine)
+            result = engine.process_value("original", ctx)
+            assert result == "transformed"
+        finally:
+            log.setLevel(original_level)

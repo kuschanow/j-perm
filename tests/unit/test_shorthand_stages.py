@@ -198,3 +198,44 @@ class TestMixedShorthands:
             "items": [1, 2, "appended"],
             "literal": 123,
         }
+
+    def test_assign_shorthand_skips_dollar_prefix_keys(self):
+        """AssignShorthandProcessor skips dicts with '$' keys (line 174)."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$ref": "/value"}},
+            source={"value": 42},
+            dest={},
+        )
+
+        assert result == {"result": 42}
+
+    def test_assign_shorthand_skips_empty_dict_step(self):
+        """AssignShorthandProcessor skips empty dict step (line 179)."""
+        engine = build_default_engine()
+
+        # Passing an empty dict {} as one step in a list — AssignShorthandProcessor skips it
+        result = engine.apply(
+            [{}, {"/y": 1}],
+            source={},
+            dest={},
+        )
+
+        assert result == {"y": 1}
+
+    def test_assert_shorthand_handles_already_processed_step(self):
+        """AssertShorthandProcessor passes through op-dict steps (line 96)."""
+        engine = build_default_engine()
+
+        # Mixed list: op-dict + ~assert shorthand
+        result = engine.apply(
+            [
+                {"op": "set", "path": "/x", "value": 1},
+                {"~assert": "/x"},
+            ],
+            source={"x": 1},
+            dest={},
+        )
+
+        assert result == {"x": 1}

@@ -1,6 +1,7 @@
 from typing import Any
 
 from j_perm import ActionHandler, ExecutionContext, ActionMatcher
+from j_perm.core import Compound, CompiledSpec
 from .signals import ReturnSignal
 
 
@@ -20,7 +21,7 @@ class CallMatcher(ActionMatcher):
         return isinstance(step, dict) and "$func" in step
 
 
-class DefHandler(ActionHandler):
+class DefHandler(ActionHandler, Compound):
     """``def: <function_name>``: Defines a function with the given name and body.
 
     Schema::
@@ -39,7 +40,16 @@ class DefHandler(ActionHandler):
     * ``on_failure``: An optional set of actions to execute if the function execution fails. This can be used to handle errors gracefully.
     """
 
-    def execute(self, step: Any, ctx: ExecutionContext) -> Any:
+    def nested_spec_keys(self, step: Any) -> list[str]:
+        return [k for k in ("body", "on_failure") if k in step]
+
+    def _make_function(
+        self,
+        step: Any,
+        ctx: ExecutionContext,
+        compiled_body: Any,
+        compiled_on_failure: Any,
+    ) -> Any:
         function_name = step["$def"]
         params = step.get("params", [])
         body = step["body"]
@@ -51,15 +61,12 @@ class DefHandler(ActionHandler):
             if len(args) != len(params):
                 raise ValueError(f"Expected {len(params)} arguments, got {len(args)} for function '{function_name}'")
             try:
-                # Use current call context if available (for recursive calls)
                 call_ctx = ctx.metadata.get('_current_call_ctx', ctx)
 
                 copy_args = {}
                 if context == "new":
-                    # Create a new context with empty dest and source, but inherit metadata
                     copy_args = {"new_dest": {}}
                 elif context == "shared":
-                    # Use the same context (dest, source, temp) for the function body
                     copy_args = {}
                 elif context == "copy":
                     copy_args = {"deepcopy_dest": True}
@@ -70,10 +77,10 @@ class DefHandler(ActionHandler):
                     new_temp_read_only={param: arg for param, arg in zip(params, args)},
                     **copy_args
                 )
-                result = ctx.engine.apply_to_context(
-                    body,
-                    ctx_copy
-                )
+                if compiled_body is not None:
+                    result = compiled_body.run(ctx_copy)
+                else:
+                    result = ctx.engine.apply_to_context(body, ctx_copy)
                 if return_path:
                     temp_ctx = ctx.copy(new_source=result)
                     return ctx.engine.processor.get(return_path, temp_ctx)
@@ -86,12 +93,26 @@ class DefHandler(ActionHandler):
                     ctx_copy = call_ctx.copy(
                         new_temp_read_only={param: arg for param, arg in zip(params, args)},
                     )
+                    if compiled_on_failure is not None:
+                        return compiled_on_failure.run(ctx_copy)
                     return ctx.engine.apply_to_context(on_failure, ctx_copy)
                 else:
                     raise e
 
+        return function
+
+    def execute(self, step: Any, ctx: ExecutionContext) -> Any:
+        function = self._make_function(step, ctx, None, None)
         ctx.metadata["__functions__"] = ctx.metadata.get("__functions__", {})
-        ctx.metadata["__functions__"][function_name] = function
+        ctx.metadata["__functions__"][step["$def"]] = function
+        return ctx.dest
+
+    def execute_compiled(self, step: Any, ctx: ExecutionContext, nested: dict[str, CompiledSpec]) -> Any:
+        compiled_body = nested.get("body")
+        compiled_on_failure = nested.get("on_failure")
+        function = self._make_function(step, ctx, compiled_body, compiled_on_failure)
+        ctx.metadata["__functions__"] = ctx.metadata.get("__functions__", {})
+        ctx.metadata["__functions__"][step["$def"]] = function
         return ctx.dest
 
 

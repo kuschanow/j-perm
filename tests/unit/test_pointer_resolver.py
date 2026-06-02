@@ -199,3 +199,69 @@ class TestPointerResolverExists:
 
         assert resolver.exists("/missing", data) is False
         assert resolver.exists("/a/missing", data) is False
+
+
+class TestPointerResolverEdgeCases:
+    """Additional edge case tests for uncovered paths."""
+
+    def test_parent_navigation_from_root_goes_to_root(self):
+        """'..' at root level returns doc (line 119)."""
+        resolver = PointerResolver()
+        data = {"a": 1}
+
+        # path like /.. → navigate up from root → returns root
+        result = resolver.get("/..", data)
+        assert result == data
+
+    def test_slice_on_non_sequence_raises(self):
+        """Slice on non-list/string raises TypeError (line 141)."""
+        resolver = PointerResolver()
+        data = {"num": 42}
+
+        with pytest.raises(TypeError, match="is not a list"):
+            resolver.get("/num[1:3]", data)
+
+    def test_ensure_parent_parent_navigation(self):
+        """'..' in path during set navigates up correctly (lines 162-164)."""
+        resolver = PointerResolver()
+        data = {"a": {"b": {"c": 1}}}
+
+        # set /a/b/../x sets /a/x (go up from b to a, then set x)
+        resolver.set("/a/b/../x", data, 99)
+        assert data["a"]["x"] == 99
+
+    def test_ensure_parent_returns_doc_for_double_dot_at_root(self):
+        """'..' at root in _ensure_parent returns (doc, '') (line 168)."""
+        resolver = PointerResolver()
+        data = {"x": 1}
+
+        # path /.. → _ensure_parent gets parts=[] → returns (doc, "")
+        # set then writes data[""] = value
+        resolver.set("/..", data, 99)
+        assert data.get("") == 99
+
+    def test_ensure_parent_list_out_of_range_with_create(self):
+        """_ensure_parent extends list when idx is out of range with create=True (lines 176-183)."""
+        resolver = PointerResolver()
+        data = {"arr": [{"x": 1}]}
+
+        # Set index 5 (out of range of 1-element list) — auto-extend with {}
+        resolver.set("/arr/5/y", data, 99)
+        assert data["arr"][5]["y"] == 99
+
+    def test_ensure_parent_list_out_of_range_without_create(self):
+        """_ensure_parent raises IndexError when list intermediate is out of range (line 182)."""
+        resolver = PointerResolver()
+        data = {"arr": [{"sub": 1}, {"sub": 2}]}
+
+        # /arr/99/sub: "99" is intermediate (before "sub") and out of range
+        with pytest.raises(IndexError):
+            resolver.delete("/arr/99/sub", data)
+
+    def test_ensure_parent_missing_key_without_create(self):
+        """_ensure_parent raises KeyError when key missing and create=False (line 189)."""
+        resolver = PointerResolver()
+        data = {"a": {}}
+
+        with pytest.raises(KeyError):
+            resolver.delete("/a/b/c", data)

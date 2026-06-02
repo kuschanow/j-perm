@@ -55,6 +55,64 @@ class TestSetOperation:
 
         assert result == {"items": ["first"]}
 
+    def test_set_append_raises_when_create_false_and_parent_missing(self):
+        """set append with create=False raises if parent missing (line 69)."""
+        engine = build_default_engine()
+
+        with pytest.raises(Exception):
+            engine.apply(
+                {"op": "set", "path": "/items/-", "value": "x", "create": False},
+                source={},
+                dest={},
+            )
+
+    def test_set_append_converts_non_list_parent_to_list(self):
+        """set converts non-list parent to list when create=True (lines 73-79)."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"op": "set", "path": "/data/-", "value": "new"},
+            source={},
+            dest={"data": "existing_string"},
+        )
+
+        assert result == {"data": ["existing_string", "new"]}
+
+    def test_set_append_empty_dict_parent_becomes_list(self):
+        """Empty dict parent becomes empty list when appending (line 76)."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"op": "set", "path": "/data/-", "value": "item"},
+            source={},
+            dest={"data": {}},
+        )
+
+        assert result == {"data": ["item"]}
+
+    def test_set_append_raises_non_list_parent_with_create_false(self):
+        """set append raises TypeError when parent is not list and create=False (line 81)."""
+        engine = build_default_engine()
+
+        with pytest.raises(TypeError):
+            engine.apply(
+                {"op": "set", "path": "/data/-", "value": "x", "create": False},
+                source={},
+                dest={"data": "string"},
+            )
+
+    def test_set_append_extends_when_value_is_list(self):
+        """set extends parent list when value is list and extend=True (line 85)."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"op": "set", "path": "/items/-", "value": [4, 5], "extend": True},
+            source={},
+            dest={"items": [1, 2, 3]},
+        )
+
+        assert result == {"items": [1, 2, 3, 4, 5]}
+
 
 class TestCopyOperation:
     """Test 'copy' operation."""
@@ -138,6 +196,28 @@ class TestDeleteOperation:
         )
 
         assert result == {"keep": 1}  # no error
+
+    def test_delete_path_with_dash_raises(self):
+        """Delete with '/-' suffix raises ValueError (line 167)."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="'-' not allowed in delete"):
+            engine.apply(
+                {"op": "delete", "path": "/items/-"},
+                source={},
+                dest={"items": [1, 2]},
+            )
+
+    def test_delete_raises_on_missing_with_ignore_false(self):
+        """Delete raises when key missing and ignore_missing=False (lines 171-173)."""
+        engine = build_default_engine()
+
+        with pytest.raises(Exception):
+            engine.apply(
+                {"op": "delete", "path": "/missing", "ignore_missing": False},
+                source={},
+                dest={},
+            )
 
 
 class TestForeachOperation:
@@ -237,6 +317,39 @@ class TestForeachOperation:
                 dest={},
             )
 
+    def test_foreach_dict_source_iterates_items(self):
+        """Dict source is converted to (key, value) tuples (line 232)."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {
+                "op": "foreach",
+                "in": "/data",
+                "do": {"/keys[]": "&:/item/0"},
+            },
+            source={"data": {"a": 1, "b": 2}},
+            dest={},
+        )
+
+        assert set(result["keys"]) == {"a", "b"}
+
+    def test_foreach_uses_default_when_pointer_fails(self):
+        """foreach falls back to default when 'in' pointer fails (lines 225-226)."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {
+                "op": "foreach",
+                "in": "/missing",
+                "default": [10, 20],
+                "do": {"/items[]": "&:/item"},
+            },
+            source={},
+            dest={},
+        )
+
+        assert result == {"items": [10, 20]}
+
 
 class TestIfOperation:
     """Test 'if' operation."""
@@ -271,6 +384,30 @@ class TestIfOperation:
 
         assert result == {"result": "no"}
 
+    def test_if_path_truthy_check(self):
+        """if with path alone checks truthiness (line 399 branch)."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"op": "if", "path": "/flag", "then": {"/ok": True}},
+            source={"flag": True},
+            dest={},
+        )
+
+        assert result == {"ok": True}
+
+    def test_if_with_no_matching_branch_returns_dest_unchanged(self):
+        """if with no matching branch key returns dest unchanged (line 409)."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"op": "if", "cond": False},
+            source={},
+            dest={"keep": "me"},
+        )
+
+        assert result == {"keep": "me"}
+
 
 class TestExecOperation:
     """Test 'exec' operation."""
@@ -298,6 +435,63 @@ class TestExecOperation:
         )
 
         assert result == {"existing": "data", "new": "value"}
+
+    def test_exec_cannot_have_both_from_and_actions(self):
+        """exec raises when both 'from' and 'actions' provided (line 451)."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="cannot have both"):
+            engine.apply(
+                {"op": "exec", "from": "/acts", "actions": {"/x": 1}},
+                source={"acts": {"/x": 1}},
+                dest={},
+            )
+
+    def test_exec_requires_from_or_actions(self):
+        """exec raises when neither 'from' nor 'actions' provided (line 453)."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="requires either"):
+            engine.apply(
+                {"op": "exec"},
+                source={},
+                dest={},
+            )
+
+    def test_exec_from_missing_with_default(self):
+        """exec uses default when 'from' pointer fails and default provided (lines 460-461)."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"op": "exec", "from": "/missing", "default": {"/fallback": True}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"fallback": True}
+
+    def test_exec_from_missing_without_default_raises(self):
+        """exec raises when 'from' pointer fails and no default (line 463)."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="Cannot find actions"):
+            engine.apply(
+                {"op": "exec", "from": "/missing"},
+                source={},
+                dest={},
+            )
+
+    def test_exec_actions_processed(self):
+        """exec with 'actions' key processes value through engine (line 465)."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"op": "exec", "actions": {"/x": "${/val}"}},
+            source={"val": 42},
+            dest={},
+        )
+
+        assert result == {"x": 42}
 
 
 class TestUpdateOperation:
@@ -332,6 +526,74 @@ class TestUpdateOperation:
 
         assert result == {"obj": {"nested": {"a": 1, "b": 2}}}
 
+    def test_update_from_pointer_with_default(self):
+        """update uses 'default' when 'from' pointer fails (lines 508-513)."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"op": "update", "path": "/obj", "from": "/missing", "default": {"fallback": True}},
+            source={},
+            dest={"obj": {"a": 1}},
+        )
+
+        assert result == {"obj": {"a": 1, "fallback": True}}
+
+    def test_update_from_pointer_raises_on_missing(self):
+        """update raises when 'from' pointer fails and no default (lines 514-515)."""
+        engine = build_default_engine()
+
+        with pytest.raises(Exception):
+            engine.apply(
+                {"op": "update", "path": "/obj", "from": "/missing"},
+                source={},
+                dest={"obj": {}},
+            )
+
+    def test_update_requires_from_or_value(self):
+        """update raises when neither 'from' nor 'value' is provided (line 519)."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="requires either 'from' or 'value'"):
+            engine.apply(
+                {"op": "update", "path": "/obj"},
+                source={},
+                dest={"obj": {}},
+            )
+
+    def test_update_creates_target_when_missing(self):
+        """update creates target dict when missing with create=True (lines 527-530)."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"op": "update", "path": "/new_obj", "value": {"x": 1}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"new_obj": {"x": 1}}
+
+    def test_update_raises_when_target_not_dict(self):
+        """update raises TypeError when target is not a dict (line 535)."""
+        engine = build_default_engine()
+
+        with pytest.raises(TypeError):
+            engine.apply(
+                {"op": "update", "path": "/arr", "value": {"x": 1}},
+                source={},
+                dest={"arr": [1, 2, 3]},
+            )
+
+    def test_update_raises_when_create_false_and_missing(self):
+        """update raises KeyError when target missing and create=False (line 532)."""
+        engine = build_default_engine()
+
+        with pytest.raises((KeyError, Exception)):
+            engine.apply(
+                {"op": "update", "path": "/missing", "value": {"x": 1}, "create": False},
+                source={},
+                dest={},
+            )
+
 
 class TestDistinctOperation:
     """Test 'distinct' operation."""
@@ -359,6 +621,32 @@ class TestDistinctOperation:
         )
 
         assert result == {"arr": [3, 1, 2]}
+
+    def test_distinct_with_key(self):
+        """distinct with 'key' deduplicates by field (line 574)."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"op": "distinct", "path": "/arr", "key": "/id"},
+            source={},
+            dest={"arr": [{"id": 1, "v": "a"}, {"id": 2, "v": "b"}, {"id": 1, "v": "c"}]},
+        )
+
+        assert len(result["arr"]) == 2
+        assert result["arr"][0]["id"] == 1
+        assert result["arr"][1]["id"] == 2
+
+    def test_distinct_with_unhashable_items(self):
+        """distinct handles unhashable items by always including them (line 578)."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"op": "distinct", "path": "/arr"},
+            source={},
+            dest={"arr": [{"a": 1}, {"b": 2}, {"a": 1}]},
+        )
+
+        assert len(result["arr"]) == 3
 
 
 class TestWhileOperation:
@@ -430,6 +718,61 @@ class TestWhileOperation:
         )
 
         assert result == {"executed": True}
+
+    def test_while_with_path_exists_condition(self):
+        """while with path+exists checks existence (line 325-326)."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            [
+                {"op": "set", "path": "/flag", "value": True},
+                {
+                    "op": "while",
+                    "path": "@:/flag",
+                    "exists": True,
+                    "do": [
+                        {"op": "set", "path": "/ran", "value": True},
+                        {"op": "delete", "path": "/flag"},
+                    ],
+                },
+            ],
+            source={},
+            dest={},
+        )
+
+        assert result.get("ran") is True
+        assert "flag" not in result
+
+    def test_while_requires_cond_or_path(self):
+        """while raises when neither 'cond' nor 'path' provided (line 330)."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="requires 'cond' or 'path'"):
+            engine.apply(
+                {"op": "while", "do": {"/x": 1}},
+                source={},
+                dest={},
+            )
+
+    def test_while_propagates_return_signal(self):
+        """while propagates ReturnSignal without rollback (line 347)."""
+        from j_perm import ReturnSignal
+
+        engine = build_default_engine()
+
+        with pytest.raises(ReturnSignal):
+            engine.apply(
+                [
+                    {"op": "set", "path": "/counter", "value": 0},
+                    {
+                        "op": "while",
+                        "cond": True,
+                        "do": [{"$return": None}],
+                    },
+                ],
+                source={},
+                dest={},
+            )
 
 
 class TestAssertOperation:
@@ -562,4 +905,280 @@ class TestAssertOperation:
                 source={},
                 dest={},
             )
+
+    def test_assert_equals_mismatch_with_return(self):
+        """Assert with equals mismatch and return=True returns False (line 664)."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"op": "assert", "path": "/x", "equals": 100, "return": True},
+            source={"x": 42},
+            dest={"existing": "data"},
+        )
+
+        assert result is False
+
+
+class TestWhileAdditional:
+    """Additional while tests for uncovered branches."""
+
+    def test_while_path_truthiness_check(self):
+        """while with path alone checks bool(current) (line 328)."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            [
+                {"op": "set", "path": "/flag", "value": "yes"},
+                {
+                    "op": "while",
+                    "path": "@:/flag",
+                    "do": [
+                        {"op": "set", "path": "/ran", "value": True},
+                        {"op": "set", "path": "/flag", "value": ""},
+                    ],
+                },
+            ],
+            source={},
+            dest={},
+        )
+
+        assert result.get("ran") is True
+        assert result.get("flag") == ""
+
+
+class TestIfAdditional:
+    """Additional if tests for uncovered branches."""
+
+    def test_if_path_equals_check(self):
+        """if with path+equals checks value equality (lines 394-395)."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {
+                "op": "if",
+                "path": "/status",
+                "equals": "active",
+                "then": {"/result": "yes"},
+                "else": {"/result": "no"},
+            },
+            source={"status": "active"},
+            dest={},
+        )
+
+        assert result == {"result": "yes"}
+
+
+class TestUpdateAdditional:
+    """Additional update tests for uncovered branches."""
+
+    def test_update_with_non_mapping_value_raises(self):
+        """update raises TypeError when value is not a mapping (line 522)."""
+        engine = build_default_engine()
+
+        with pytest.raises(TypeError, match="must be a dict"):
+            engine.apply(
+                {"op": "update", "path": "/obj", "value": [1, 2, 3]},
+                source={},
+                dest={"obj": {}},
+            )
+
+
+class TestDistinctAdditional:
+    """Additional distinct tests for uncovered branches."""
+
+    def test_distinct_raises_for_non_list(self):
+        """distinct raises TypeError when path is not a list (line 574)."""
+        engine = build_default_engine()
+
+        with pytest.raises(TypeError, match="is not a list"):
+            engine.apply(
+                {"op": "distinct", "path": "/data"},
+                source={},
+                dest={"data": "not_a_list"},
+            )
+
+
+class TestDeserializeOperation:
+    """Test 'deserialize' operation."""
+
+    def test_deserialize_json_from_pointer(self):
+        """Parse JSON string from source pointer."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"op": "deserialize", "from": "/data", "format": "json", "path": "/parsed"},
+            source={"data": '{"name": "Alice", "age": 30}'},
+            dest={},
+        )
+
+        assert result == {"parsed": {"name": "Alice", "age": 30}}
+
+    def test_deserialize_json_inline_value(self):
+        """Parse JSON string passed as inline value."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"op": "deserialize", "value": '[1, 2, 3]', "format": "json", "path": "/items"},
+            source={},
+            dest={},
+        )
+
+        assert result == {"items": [1, 2, 3]}
+
+    def test_deserialize_pretty_json(self):
+        """'pretty_json' format is an alias for 'json'."""
+        engine = build_default_engine()
+
+        pretty = '{\n    "key": "value"\n}'
+        result = engine.apply(
+            {"op": "deserialize", "value": pretty, "format": "pretty_json", "path": "/obj"},
+            source={},
+            dest={},
+        )
+
+        assert result == {"obj": {"key": "value"}}
+
+    def test_deserialize_yaml_from_pointer(self):
+        """Parse YAML string from source pointer."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"op": "deserialize", "from": "/raw", "format": "yaml", "path": "/doc"},
+            source={"raw": "name: Bob\nage: 25\n"},
+            dest={},
+        )
+
+        assert result == {"doc": {"name": "Bob", "age": 25}}
+
+    def test_deserialize_yaml_inline_value(self):
+        """Parse YAML string passed as inline value."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"op": "deserialize", "value": "- a\n- b\n- c\n", "format": "yaml", "path": "/list"},
+            source={},
+            dest={},
+        )
+
+        assert result == {"list": ["a", "b", "c"]}
+
+    def test_deserialize_default_format_is_json(self):
+        """When 'format' is omitted, JSON is used."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"op": "deserialize", "value": '{"x": 1}', "path": "/obj"},
+            source={},
+            dest={},
+        )
+
+        assert result == {"obj": {"x": 1}}
+
+    def test_deserialize_default_on_missing_pointer(self):
+        """Use 'default' when source pointer does not exist."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"op": "deserialize", "from": "/missing", "format": "json",
+             "path": "/obj", "default": {"fallback": True}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"obj": {"fallback": True}}
+
+    def test_deserialize_default_on_parse_error(self):
+        """Use 'default' when the string cannot be parsed."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"op": "deserialize", "value": "not valid json", "format": "json",
+             "path": "/obj", "default": None},
+            source={},
+            dest={},
+        )
+
+        assert result == {"obj": None}
+
+    def test_deserialize_raises_on_missing_pointer_without_default(self):
+        """Raise when source pointer is missing and no default provided."""
+        engine = build_default_engine()
+
+        with pytest.raises(Exception):
+            engine.apply(
+                {"op": "deserialize", "from": "/missing", "format": "json", "path": "/obj"},
+                source={},
+                dest={},
+            )
+
+    def test_deserialize_raises_on_invalid_json_without_default(self):
+        """Raise ValueError when JSON is invalid and no default provided."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="failed to parse as 'json'"):
+            engine.apply(
+                {"op": "deserialize", "value": "{bad json}", "format": "json", "path": "/obj"},
+                source={},
+                dest={},
+            )
+
+    def test_deserialize_raises_on_unknown_format(self):
+        """Raise ValueError for unsupported format name."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="unknown format"):
+            engine.apply(
+                {"op": "deserialize", "value": "{}", "format": "toml", "path": "/obj"},
+                source={},
+                dest={},
+            )
+
+    def test_deserialize_requires_from_or_value(self):
+        """Raise when neither 'from' nor 'value' is provided."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="requires either 'from' or 'value'"):
+            engine.apply(
+                {"op": "deserialize", "format": "json", "path": "/obj"},
+                source={},
+                dest={},
+            )
+
+    def test_deserialize_cannot_have_both_from_and_value(self):
+        """Raise when both 'from' and 'value' are provided."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="cannot have both 'from' and 'value'"):
+            engine.apply(
+                {"op": "deserialize", "from": "/data", "value": "{}", "format": "json", "path": "/obj"},
+                source={"data": "{}"},
+                dest={},
+            )
+
+    def test_deserialize_with_context_prefix_in_from(self):
+        """'from' supports context prefixes like '@:' (dest)."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            [
+                {"op": "set", "path": "/raw", "value": '{"ok": true}'},
+                {"op": "deserialize", "from": "@:/raw", "format": "json", "path": "/parsed"},
+            ],
+            source={},
+            dest={},
+        )
+
+        assert result == {"raw": '{"ok": true}', "parsed": {"ok": True}}
+
+    def test_deserialize_writes_to_nested_path_with_autocreate(self):
+        """Auto-create intermediate nodes when writing to nested path."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"op": "deserialize", "value": '{"v": 1}', "format": "json", "path": "/a/b/parsed"},
+            source={},
+            dest={},
+        )
+
+        assert result == {"a": {"b": {"parsed": {"v": 1}}}}
 

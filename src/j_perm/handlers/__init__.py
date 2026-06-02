@@ -54,6 +54,7 @@ from .ops import (
     UpdateHandler, DistinctHandler,
     AssertHandler,
     TryHandler,
+    DeserializeHandler,
 )
 from .special import SpecialFn, SpecialMatcher, SpecialResolveHandler
 from .template import TemplMatcher, TemplSubstHandler, template_unescape
@@ -134,6 +135,7 @@ __all__ = [
     "DistinctHandler",
     "AssertHandler",
     "TryHandler",
+    "DeserializeHandler",
     # flow control
     "BreakMatcher",
     "BreakHandler",

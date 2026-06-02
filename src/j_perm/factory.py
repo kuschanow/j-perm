@@ -60,6 +60,7 @@ from .handlers.ops import (
     UpdateHandler, DistinctHandler,
     AssertHandler,
     TryHandler,
+    DeserializeHandler,
 )
 from .handlers.special import SpecialFn, SpecialMatcher, SpecialResolveHandler
 from .handlers.template import TemplMatcher, TemplSubstHandler, template_unescape
@@ -354,6 +355,11 @@ def build_default_engine(
         name="try", priority=10,
         matcher=OpMatcher("try"),
         handler=TryHandler(),
+    ))
+    main_reg.register(ActionNode(
+        name="deserialize", priority=10,
+        matcher=OpMatcher("deserialize"),
+        handler=DeserializeHandler(set_handler=set_handler),
     ))
     main_reg.register(ActionNode(
         name="def", priority=10,

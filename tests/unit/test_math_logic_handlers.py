@@ -698,3 +698,74 @@ class TestExistsConstruct:
                 source={},
                 dest={},
             )
+
+
+class TestComparisonValidationErrors:
+    """Test validation errors for comparison operators."""
+
+    def test_gte_invalid_args_raises(self):
+        """$gte raises ValueError if not given a list of 2 (line 233)."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="requires a list of exactly 2 values"):
+            engine.apply({"/r": {"$gte": [1, 2, 3]}}, source={}, dest={})
+
+    def test_lt_invalid_args_raises(self):
+        """$lt raises ValueError if not given a list of 2 (line 257)."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="requires a list of exactly 2 values"):
+            engine.apply({"/r": {"$lt": 5}}, source={}, dest={})
+
+    def test_lte_invalid_args_raises(self):
+        """$lte raises ValueError if not given a list of 2 (line 281)."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="requires a list of exactly 2 values"):
+            engine.apply({"/r": {"$lte": [1]}}, source={}, dest={})
+
+    def test_ne_invalid_args_raises(self):
+        """$ne raises ValueError if not given a list of 2 (line 330)."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="requires a list of exactly 2 values"):
+            engine.apply({"/r": {"$ne": "bad"}}, source={}, dest={})
+
+
+class TestMathValidationErrors:
+    """Test validation errors for math operators."""
+
+    def test_sub_invalid_args_raises(self):
+        """$sub raises ValueError for empty list (line 487)."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="requires a list of at least 1 value"):
+            engine.apply({"/r": {"$sub": []}}, source={}, dest={})
+
+    def test_mul_invalid_args_raises(self):
+        """$mul raises ValueError for empty list (line 547)."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="requires a list of at least 1 value"):
+            engine.apply({"/r": {"$mul": []}}, source={}, dest={})
+
+    def test_div_invalid_args_raises(self):
+        """$div raises ValueError for empty list (line 606)."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="requires a list of at least 1 value"):
+            engine.apply({"/r": {"$div": "bad"}}, source={}, dest={})
+
+    def test_pow_invalid_args_raises(self):
+        """$pow raises ValueError for empty list (line 652)."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="requires a list of at least 1 value"):
+            engine.apply({"/r": {"$pow": []}}, source={}, dest={})
+
+    def test_mod_invalid_args_raises(self):
+        """$mod raises ValueError for empty list (line 708)."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="requires a list of at least 1 value"):
+            engine.apply({"/r": {"$mod": "bad"}}, source={}, dest={})
