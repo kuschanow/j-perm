@@ -21,7 +21,7 @@ from typing import Any, Mapping
 
 import yaml as _yaml
 
-from ..core import ActionHandler, ExecutionContext
+from ..core import ActionHandler, Compound, CompiledSpec, ExecutionContext
 from .signals import BreakSignal, ContinueSignal, ReturnSignal
 
 
@@ -179,7 +179,7 @@ class DeleteHandler(ActionHandler):
 # foreach — iterate over array
 # ─────────────────────────────────────────────────────────────────────────────
 
-class ForeachHandler(ActionHandler):
+class ForeachHandler(ActionHandler, Compound):
     """``op: foreach`` — iterate over array from source, execute nested actions.
 
     Schema::
@@ -203,6 +203,9 @@ class ForeachHandler(ActionHandler):
 
     def __init__(self, max_items: int = 100_000) -> None:
         self._max_items = max_items
+
+    def nested_spec_keys(self, step: Any) -> list[str]:
+        return ["do"]
 
     def execute(self, step: Any, ctx: ExecutionContext) -> Any:
         has_in = "in" in step
@@ -265,12 +268,71 @@ class ForeachHandler(ActionHandler):
 
         return ctx.dest
 
+    def execute_compiled(self, step: Any, ctx: ExecutionContext, nested: dict[str, CompiledSpec]) -> Any:
+        has_in = "in" in step
+        has_in_value = "in_value" in step
+
+        if has_in and has_in_value:
+            raise ValueError("foreach operation cannot have both 'in' and 'in_value' parameters")
+        if not has_in and not has_in_value:
+            raise ValueError("foreach operation requires either 'in' or 'in_value' parameter")
+
+        skip_empty = bool(ctx.engine.process_value(step.get("skip_empty", True), ctx))
+
+        if has_in_value:
+            arr = ctx.engine.process_value(step["in_value"], ctx)
+        else:
+            arr_ptr = ctx.engine.process_value(step["in"], ctx)
+            default = copy.deepcopy(ctx.engine.process_value(step.get("default", []), ctx))
+            try:
+                arr = ctx.engine.processor.get(arr_ptr, ctx)
+            except Exception:
+                arr = default
+
+        if not arr and skip_empty:
+            return ctx.dest
+
+        if isinstance(arr, dict):
+            arr = list(arr.items())
+
+        arr_len = len(arr) if hasattr(arr, '__len__') else sum(1 for _ in arr)
+        if arr_len > self._max_items:
+            raise ValueError(
+                f"Foreach array size ({arr_len}) exceeds maximum ({self._max_items})"
+            )
+
+        var = ctx.engine.process_value(step.get("as", "item"), ctx)
+        body = step["do"]
+        compiled_body = nested.get("do")
+        snapshot = copy.deepcopy(ctx.dest)
+
+        try:
+            for elem in arr:
+                foreach_ctx = ctx.copy(new_temp_read_only={**ctx.temp_read_only, var: elem})
+                try:
+                    if compiled_body is not None:
+                        ctx.dest = compiled_body.run(foreach_ctx)
+                    else:
+                        ctx.dest = ctx.engine.apply_to_context(body, foreach_ctx)
+                except ContinueSignal:
+                    ctx.dest = foreach_ctx.dest
+                except BreakSignal:
+                    ctx.dest = foreach_ctx.dest
+                    break
+        except ReturnSignal:
+            raise
+        except Exception:
+            ctx.dest = snapshot
+            raise
+
+        return ctx.dest
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # while — loop with condition
 # ─────────────────────────────────────────────────────────────────────────────
 
-class WhileHandler(ActionHandler):
+class WhileHandler(ActionHandler, Compound):
     """``op: while`` — loop while condition holds.
 
     Schema (path-based)::
@@ -294,6 +356,30 @@ class WhileHandler(ActionHandler):
     def __init__(self, max_iterations: int = 10_000) -> None:
         self._max_iterations = max_iterations
 
+    def nested_spec_keys(self, step: Any) -> list[str]:
+        return ["do"]
+
+    def _eval_condition(self, step: Any, ctx: ExecutionContext) -> bool:
+        """Evaluate the while condition. Returns True to continue looping."""
+        if "cond" in step:
+            return bool(ctx.engine.process_value(step["cond"], ctx))
+        if "path" in step:
+            try:
+                ptr = ctx.engine.process_value(step["path"], ctx)
+                current = ctx.engine.processor.get(ptr, ctx)
+                missing = False
+            except Exception:
+                current = None
+                missing = True
+            if "equals" in step:
+                expected = ctx.engine.process_value(step["equals"], ctx)
+                return current == expected and not missing
+            elif ctx.engine.process_value(step.get("exists", False), ctx):
+                return not missing
+            else:
+                return bool(current) and not missing
+        raise ValueError("while operation requires 'cond' or 'path'")
+
     def execute(self, step: Any, ctx: ExecutionContext) -> Any:
         do_while = bool(ctx.engine.process_value(step.get("do_while", False), ctx))
         snapshot = copy.deepcopy(ctx.dest)
@@ -305,48 +391,57 @@ class WhileHandler(ActionHandler):
                     raise RuntimeError(
                         f"While loop exceeded maximum iterations ({self._max_iterations})"
                     )
-                if not do_while:
-                    # Evaluate condition
-                    if "cond" in step:
-                        raw_cond = ctx.engine.process_value(step["cond"], ctx)
-                        cond_val = bool(raw_cond)
-                    elif "path" in step:
-                        try:
-                            ptr = ctx.engine.process_value(step["path"], ctx)
-                            current = ctx.engine.processor.get(ptr, ctx)
-                            missing = False
-                        except Exception:
-                            current = None
-                            missing = True
+                if not do_while and not self._eval_condition(step, ctx):
+                    break
 
-                        if "equals" in step:
-                            expected = ctx.engine.process_value(step["equals"], ctx)
-                            cond_val = current == expected and not missing
-                        elif ctx.engine.process_value(step.get("exists", False), ctx):
-                            cond_val = not missing
-                        else:
-                            cond_val = bool(current) and not missing
-                    else:
-                        raise ValueError("while operation requires 'cond' or 'path'")
-
-                    if not cond_val:
-                        break
-
-                # Execute body, preserving metadata (functions)
                 try:
                     ctx.dest = ctx.engine.apply_to_context(step["do"], ctx)
                 except ContinueSignal:
-                    pass  # ctx.dest already reflects changes; re-evaluate condition
+                    pass
                 except BreakSignal:
-                    break  # ctx.dest already reflects changes; stop the loop
+                    break
 
-                # After first iteration, always check condition
                 do_while = False
                 iteration += 1
         except ReturnSignal:
             raise  # Propagate without rollback
         except Exception:
-            # Rollback on error
+            ctx.dest = snapshot
+            raise
+
+        return ctx.dest
+
+    def execute_compiled(self, step: Any, ctx: ExecutionContext, nested: dict[str, CompiledSpec]) -> Any:
+        do_while = bool(ctx.engine.process_value(step.get("do_while", False), ctx))
+        compiled_body = nested.get("do")
+        body = step["do"]
+        snapshot = copy.deepcopy(ctx.dest)
+
+        try:
+            iteration = 0
+            while True:
+                if iteration >= self._max_iterations:
+                    raise RuntimeError(
+                        f"While loop exceeded maximum iterations ({self._max_iterations})"
+                    )
+                if not do_while and not self._eval_condition(step, ctx):
+                    break
+
+                try:
+                    if compiled_body is not None:
+                        ctx.dest = compiled_body.run(ctx)
+                    else:
+                        ctx.dest = ctx.engine.apply_to_context(body, ctx)
+                except ContinueSignal:
+                    pass
+                except BreakSignal:
+                    break
+
+                do_while = False
+                iteration += 1
+        except ReturnSignal:
+            raise
+        except Exception:
             ctx.dest = snapshot
             raise
 
@@ -357,7 +452,7 @@ class WhileHandler(ActionHandler):
 # if — conditional execution
 # ─────────────────────────────────────────────────────────────────────────────
 
-class IfHandler(ActionHandler):
+class IfHandler(ActionHandler, Compound):
     """``op: if`` — conditionally execute nested actions.
 
     Schema (path-based)::
@@ -380,7 +475,10 @@ class IfHandler(ActionHandler):
     If condition fails, rollback dest to snapshot.
     """
 
-    def execute(self, step: Any, ctx: ExecutionContext) -> Any:
+    def nested_spec_keys(self, step: Any) -> list[str]:
+        return [k for k in ("then", "do", "else") if k in step]
+
+    def _eval_condition(self, step: Any, ctx: ExecutionContext) -> bool:
         if "path" in step:
             try:
                 ptr = ctx.engine.process_value(step["path"], ctx)
@@ -389,21 +487,23 @@ class IfHandler(ActionHandler):
             except Exception:
                 current = None
                 missing = True
-
             if "equals" in step:
                 expected = ctx.engine.process_value(step["equals"], ctx)
-                cond_val = current == expected and not missing
+                return current == expected and not missing
             elif ctx.engine.process_value(step.get("exists", False), ctx):
-                cond_val = not missing
+                return not missing
             else:
-                cond_val = bool(current) and not missing
-        else:
-            raw_cond = ctx.engine.process_value(step.get("cond"), ctx)
-            cond_val = bool(raw_cond)
+                return bool(current) and not missing
+        raw_cond = ctx.engine.process_value(step.get("cond"), ctx)
+        return bool(raw_cond)
 
-        # Choose branch
+    def _get_branch_key(self, step: Any, cond_val: bool) -> Any:
         branch_key = "then" if cond_val else "else"
-        branch_key = branch_key if branch_key in step else "do" if cond_val else None
+        return branch_key if branch_key in step else ("do" if cond_val else None)
+
+    def execute(self, step: Any, ctx: ExecutionContext) -> Any:
+        cond_val = self._eval_condition(step, ctx)
+        branch_key = self._get_branch_key(step, cond_val)
         actions = step.get(branch_key)
 
         if not actions:
@@ -414,6 +514,26 @@ class IfHandler(ActionHandler):
             return ctx.engine.apply_to_context(actions, ctx)
         except (BreakSignal, ContinueSignal, ReturnSignal):
             raise  # Don't rollback — propagate control flow signals as-is
+        except Exception:
+            ctx.dest = snapshot
+            raise
+
+    def execute_compiled(self, step: Any, ctx: ExecutionContext, nested: dict[str, CompiledSpec]) -> Any:
+        cond_val = self._eval_condition(step, ctx)
+        branch_key = self._get_branch_key(step, cond_val)
+        actions = step.get(branch_key)
+
+        if not actions:
+            return ctx.dest
+
+        compiled_branch = nested.get(branch_key) if branch_key else None
+        snapshot = copy.deepcopy(ctx.dest)
+        try:
+            if compiled_branch is not None:
+                return compiled_branch.run(ctx)
+            return ctx.engine.apply_to_context(actions, ctx)
+        except (BreakSignal, ContinueSignal, ReturnSignal):
+            raise
         except Exception:
             ctx.dest = snapshot
             raise
@@ -675,7 +795,7 @@ class AssertHandler(ActionHandler):
 # try — error handling with except and finally blocks
 # ─────────────────────────────────────────────────────────────────────────────
 
-class TryHandler(ActionHandler):
+class TryHandler(ActionHandler, Compound):
     """``op: try`` — execute actions with error handling.
 
     Schema::
@@ -740,8 +860,23 @@ class TryHandler(ActionHandler):
         }
     """
 
+    def nested_spec_keys(self, step: Any) -> list[str]:
+        return [k for k in ("do", "except", "finally") if k in step]
+
+    def _run_body(self, actions: Any, compiled: Any, ctx: ExecutionContext) -> None:
+        if compiled is not None:
+            compiled.run(ctx)
+        else:
+            ctx.engine.apply_to_context(actions, ctx)
+
     def execute(self, step: Any, ctx: ExecutionContext) -> Any:
         """Execute try-except-finally logic."""
+        return self._execute_impl(step, ctx, {})
+
+    def execute_compiled(self, step: Any, ctx: ExecutionContext, nested: dict[str, CompiledSpec]) -> Any:
+        return self._execute_impl(step, ctx, nested)
+
+    def _execute_impl(self, step: Any, ctx: ExecutionContext, nested: dict[str, CompiledSpec]) -> Any:
         do_actions = step.get("do")
         except_actions = step.get("except")
         finally_actions = step.get("finally")
@@ -749,16 +884,18 @@ class TryHandler(ActionHandler):
         if do_actions is None:
             raise ValueError("try operation requires 'do' parameter")
 
-        # Try to execute the main actions
+        compiled_do = nested.get("do")
+        compiled_except = nested.get("except")
+        compiled_finally = nested.get("finally")
+
         try:
-            ctx.engine.apply_to_context(do_actions, ctx)
+            self._run_body(do_actions, compiled_do, ctx)
         except (BreakSignal, ContinueSignal, ReturnSignal):
-            # Control flow signals are not errors — propagate them, but run finally first
             if finally_actions is not None:
                 try:
-                    ctx.engine.apply_to_context(finally_actions, ctx)
+                    self._run_body(finally_actions, compiled_finally, ctx)
                 except Exception:
-                    pass  # Don't suppress the control flow signal with a finally error
+                    pass
             raise
         except Exception as e:
             error_info = {
@@ -766,30 +903,23 @@ class TryHandler(ActionHandler):
                 "_error_message": str(e),
             }
 
-            # If except block exists, execute it with error info in temp_read_only
             if except_actions is not None:
-                # Add error info to temp_read_only
                 ctx.temp_read_only.update(error_info)
-
                 try:
-                    ctx.engine.apply_to_context(except_actions, ctx)
+                    self._run_body(except_actions, compiled_except, ctx)
                 finally:
-                    # Remove error info keys from temp_read_only
                     ctx.temp_read_only.pop('_error_type', None)
                     ctx.temp_read_only.pop('_error_message', None)
             else:
-                # No except block, re-raise the error
-                # But first execute finally if it exists
                 if finally_actions is not None:
                     try:
-                        ctx.engine.apply_to_context(finally_actions, ctx)
+                        self._run_body(finally_actions, compiled_finally, ctx)
                     except Exception:
-                        pass  # Ignore errors in finally when re-raising original error
+                        pass
                 raise
 
-        # Always execute finally block if specified
         if finally_actions is not None:
-            ctx.engine.apply_to_context(finally_actions, ctx)
+            self._run_body(finally_actions, compiled_finally, ctx)
 
         return ctx.dest
 
