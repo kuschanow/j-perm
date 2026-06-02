@@ -179,6 +179,64 @@ class TestForeachOperation:
 
         assert result == {"pre": "existing"}  # unchanged
 
+    def test_foreach_in_value_basic(self):
+        """in_value passes array directly without pointer resolution."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"op": "foreach", "in_value": [10, 20, 30], "do": {"/out[]": "&:/item"}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"out": [10, 20, 30]}
+
+    def test_foreach_in_value_template(self):
+        """in_value supports template expressions."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"op": "foreach", "in_value": "${/tags}", "as": "tag", "do": {"/out[]": "&:/tag"}},
+            source={"tags": ["a", "b"]},
+            dest={},
+        )
+
+        assert result == {"out": ["a", "b"]}
+
+    def test_foreach_in_value_skip_empty(self):
+        """in_value respects skip_empty."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"op": "foreach", "in_value": [], "do": {"/out[]": "&:/item"}},
+            source={},
+            dest={"pre": "existing"},
+        )
+
+        assert result == {"pre": "existing"}
+
+    def test_foreach_both_in_params_raises(self):
+        """Providing both 'in' and 'in_value' raises ValueError."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="cannot have both"):
+            engine.apply(
+                {"op": "foreach", "in": "/items", "in_value": [1, 2], "do": {"/out[]": "&:/item"}},
+                source={"items": [1, 2]},
+                dest={},
+            )
+
+    def test_foreach_no_in_params_raises(self):
+        """Providing neither 'in' nor 'in_value' raises ValueError."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="requires either"):
+            engine.apply(
+                {"op": "foreach", "do": {"/out[]": "&:/item"}},
+                source={},
+                dest={},
+            )
+
 
 class TestIfOperation:
     """Test 'if' operation."""

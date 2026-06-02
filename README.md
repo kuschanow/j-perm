@@ -1726,6 +1726,7 @@ Iterate over array/mapping.
 {
     "op": "foreach",
     "in": "/items",
+    // OR: "in_value": <array> — pass array directly (mutually exclusive with "in")
     "as": "item",
     // Variable name (default: "item")
     "do": [
@@ -1735,9 +1736,16 @@ Iterate over array/mapping.
     "skip_empty": true,
     // Skip if empty (default: true)
     "default": []
-    // Fallback if missing
+    // Fallback if "in" pointer fails (not applicable to "in_value")
 }
 ```
+
+Exactly one of `in` or `in_value` must be specified:
+
+| Parameter | Description |
+|-----------|-------------|
+| `in` | JSON Pointer to an array in source. Supports slices. Falls back to `default` if the pointer fails. |
+| `in_value` | Array value passed directly (supports templates, `$ref`, etc.). No pointer resolution. `default` is ignored. |
 
 **Note:** If source is a dict, iterates over `(key, value)` tuples.
 

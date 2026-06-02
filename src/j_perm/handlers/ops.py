@@ -184,6 +184,7 @@ class ForeachHandler(ActionHandler):
          "do": <actions>, "skip_empty": true, "default": []}
 
     * ``in`` — source array pointer (supports slices)
+    * ``in_value`` — plain array value
     * ``as`` (default ``"item"``) — variable name in extended source
     * ``do`` — nested actions (each iteration sees extended source)
     * ``skip_empty`` (default ``true``) — skip if array is empty
@@ -200,15 +201,25 @@ class ForeachHandler(ActionHandler):
         self._max_items = max_items
 
     def execute(self, step: Any, ctx: ExecutionContext) -> Any:
-        arr_ptr = ctx.engine.process_value(step["in"], ctx)
+        has_in = "in" in step
+        has_in_value = "in_value" in step
 
-        default = copy.deepcopy(ctx.engine.process_value(step.get("default", []), ctx))
+        if has_in and has_in_value:
+            raise ValueError("foreach operation cannot have both 'in' and 'in_value' parameters")
+        if not has_in and not has_in_value:
+            raise ValueError("foreach operation requires either 'in' or 'in_value' parameter")
+
         skip_empty = bool(ctx.engine.process_value(step.get("skip_empty", True), ctx))
 
-        try:
-            arr = ctx.engine.processor.get(arr_ptr, ctx)
-        except Exception:
-            arr = default
+        if has_in_value:
+            arr = ctx.engine.process_value(step["in_value"], ctx)
+        else:
+            arr_ptr = ctx.engine.process_value(step["in"], ctx)
+            default = copy.deepcopy(ctx.engine.process_value(step.get("default", []), ctx))
+            try:
+                arr = ctx.engine.processor.get(arr_ptr, ctx)
+            except Exception:
+                arr = default
 
         if not arr and skip_empty:
             return ctx.dest
