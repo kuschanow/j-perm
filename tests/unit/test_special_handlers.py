@@ -1026,3 +1026,24 @@ class TestInOperator:
             )
 
 
+
+
+class TestSpecialResolveHandlerFallback:
+    """Test SpecialResolveHandler fallback (line 74)."""
+
+    def test_no_matching_key_returns_step(self):
+        """SpecialResolveHandler returns step unchanged when no key matched (line 74)."""
+        from j_perm import SpecialResolveHandler, ExecutionContext, SpecialMatcher
+
+        def dummy_fn(node, ctx):
+            return "handled"
+
+        handler = SpecialResolveHandler({"$known": dummy_fn})
+        step = {"$unknown": "value"}
+
+        class FakeEngine:
+            pass
+
+        ctx = ExecutionContext(source={}, dest={}, engine=FakeEngine())
+        result = handler.execute(step, ctx)
+        assert result == {"$unknown": "value"}

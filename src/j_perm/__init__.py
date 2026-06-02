@@ -128,6 +128,7 @@ from .handlers import (
     DistinctHandler,
     AssertHandler,
     TryHandler,
+    DeserializeHandler,
     # function
     DefMatcher,
     CallMatcher,
@@ -277,6 +278,7 @@ __all__ = [
     "DistinctHandler",
     "AssertHandler",
     "TryHandler",
+    "DeserializeHandler",
     # flow control
     "BreakMatcher",
     "BreakHandler",

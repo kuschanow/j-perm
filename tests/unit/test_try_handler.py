@@ -385,3 +385,84 @@ class TestTryHandler:
 
         assert result["valid"] is False
         assert result["error_msg"] == "Age cannot be negative"
+
+    def test_try_requires_do_parameter(self):
+        """try raises ValueError when 'do' is missing (line 750)."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="requires 'do' parameter"):
+            engine.apply(
+                {"op": "try", "except": [{"/x": 1}]},
+                source={},
+                dest={},
+            )
+
+    def test_try_with_break_signal_and_finally(self):
+        """$break inside try propagates after running finally (lines 755-762)."""
+        engine = build_default_engine()
+
+        # foreach catches $break; but finally should have run first
+        result = engine.apply(
+            [
+                {
+                    "op": "foreach",
+                    "in_value": [1, 2, 3],
+                    "do": [
+                        {
+                            "op": "try",
+                            "do": [{"$break": None}],
+                            "finally": [{"/cleanup": True}],
+                        }
+                    ],
+                }
+            ],
+            source={},
+            dest={},
+        )
+
+        # finally ran and set /cleanup
+        assert result.get("cleanup") is True
+
+    def test_try_no_except_with_finally_that_errors(self):
+        """No except block + finally that raises: original error re-raised (lines 783-787)."""
+        engine = build_default_engine()
+
+        with pytest.raises(JPermError, match="original error"):
+            engine.apply(
+                {
+                    "op": "try",
+                    "do": [{"$raise": "original error"}],
+                    "finally": [{"$raise": "finally error"}],
+                },
+                source={},
+                dest={},
+            )
+
+    def test_try_break_with_finally_that_errors_suppresses_finally_error(self):
+        """Finally error suppressed when control flow signal propagates (lines 760-761)."""
+        engine = build_default_engine()
+
+        # $break inside foreach try + finally that errors → finally error suppressed, $break continues
+        result = engine.apply(
+            [
+                {
+                    "op": "foreach",
+                    "in_value": [1, 2],
+                    "do": [
+                        {
+                            "op": "try",
+                            "do": [{"$break": None}],
+                            "finally": [
+                                {"/cleanup": True},
+                                {"$raise": "finally_error"},
+                            ],
+                        }
+                    ],
+                }
+            ],
+            source={},
+            dest={},
+        )
+
+        # finally ran (set cleanup) but finally error was suppressed; foreach broke
+        assert result.get("cleanup") is True

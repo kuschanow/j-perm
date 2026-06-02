@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "j-perm"
-version = "1.7.0"
+version = "1.8.0"
 description = "json permutation library"
 authors = [
     { name = "Roman", email = "kuschanow@gmail.com" },
@@ -19,14 +19,27 @@ license = { text = "MIT" }
 
 dependencies = [
     "jmespath",
-    "regex"
+    "regex",
+    "pyyaml"
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-addopts = "-q"
-markers = [
+addopts = "--cov=src/j_perm --cov-report=term-missing"
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["src/j_perm"]
+omit = []
+
+[tool.coverage.report]
+fail_under = 100
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+    "^\\s*\\.\\.\\.\\s*$",
 ]
 
 [project.urls]

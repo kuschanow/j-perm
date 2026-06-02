@@ -3,19 +3,23 @@
 Each operation is implemented as an ``ActionHandler`` that accepts steps
 with ``{"op": "operation_name", ...}``.
 
-Exports all 12 operation handlers:
-* SetHandler, CopyHandler, CopyDHandler
+Exports all 13 operation handlers:
+* SetHandler, CopyHandler
 * DeleteHandler
-* ForeachHandler, IfHandler, ExecHandler
+* ForeachHandler, WhileHandler, IfHandler, ExecHandler
 * UpdateHandler, DistinctHandler
-* ReplaceRootHandler
-* AssertHandler, AssertDHandler
+* AssertHandler
+* TryHandler
+* DeserializeHandler
 """
 
 from __future__ import annotations
 
 import copy
+import json as _json
 from typing import Any, Mapping
+
+import yaml as _yaml
 
 from ..core import ActionHandler, ExecutionContext
 from .signals import BreakSignal, ContinueSignal, ReturnSignal
@@ -788,3 +792,96 @@ class TryHandler(ActionHandler):
             ctx.engine.apply_to_context(finally_actions, ctx)
 
         return ctx.dest
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# deserialize — parse serialized string into a value
+# ─────────────────────────────────────────────────────────────────────────────
+
+_DESERIALIZE_FORMATS = frozenset({"json", "pretty_json", "yaml"})
+
+
+class DeserializeHandler(ActionHandler):
+    """``op: deserialize`` — parse a serialized string into a structured value.
+
+    Schema::
+
+        {"op": "deserialize", "from": "/raw_string",
+         "format": "json", "path": "/result",
+         "create": true, "extend": true, "default": <fallback>}
+
+    * ``from`` — source pointer to the serialized string (supports all context prefixes)
+    * ``value`` — inline serialized string (mutually exclusive with ``from``)
+    * ``format`` — one of ``"json"``, ``"pretty_json"`` (alias for ``"json"``), ``"yaml"``
+    * ``path`` — destination pointer
+    * ``create`` (default ``true``) — auto-create intermediate nodes
+    * ``extend`` (default ``true``) — extend list instead of wrap when appending
+    * ``default`` — fallback value if the source pointer fails or parsing fails
+
+    Supported formats:
+
+    * ``json`` / ``pretty_json`` — RFC 8259 JSON (compact and pretty-printed both accepted)
+    * ``yaml`` — YAML document parsed with ``yaml.safe_load``
+    """
+
+    def __init__(self, set_handler: SetHandler | None = None) -> None:
+        self._set = set_handler or SetHandler()
+
+    def execute(self, step: Any, ctx: ExecutionContext) -> Any:
+        has_from = "from" in step
+        has_value = "value" in step
+
+        if has_from and has_value:
+            raise ValueError("deserialize cannot have both 'from' and 'value'")
+        if not has_from and not has_value:
+            raise ValueError("deserialize requires either 'from' or 'value'")
+
+        fmt = ctx.engine.process_value(step.get("format", "json"), ctx)
+        if fmt not in _DESERIALIZE_FORMATS:
+            raise ValueError(
+                f"deserialize: unknown format '{fmt}'. Supported: {', '.join(sorted(_DESERIALIZE_FORMATS))}"
+            )
+
+        path = ctx.engine.process_value(step["path"], ctx)
+        create = bool(ctx.engine.process_value(step.get("create", True), ctx))
+        extend_list = bool(ctx.engine.process_value(step.get("extend", True), ctx))
+
+        if has_from:
+            ptr = ctx.engine.process_value(step["from"], ctx)
+            try:
+                raw = ctx.engine.processor.get(ptr, ctx)
+            except Exception:
+                if "default" in step:
+                    fallback = ctx.engine.process_value(step["default"], ctx)
+                    return self._set.execute(
+                        {"op": "set", "path": path, "value": fallback,
+                         "create": create, "extend": extend_list},
+                        ctx,
+                    )
+                raise
+        else:
+            raw = ctx.engine.process_value(step["value"], ctx)
+
+        try:
+            parsed = _parse_format(fmt, raw)
+        except Exception as exc:
+            if "default" in step:
+                fallback = ctx.engine.process_value(step["default"], ctx)
+                return self._set.execute(
+                    {"op": "set", "path": path, "value": fallback,
+                     "create": create, "extend": extend_list},
+                    ctx,
+                )
+            raise ValueError(f"deserialize: failed to parse as '{fmt}': {exc}") from exc
+
+        return self._set.execute(
+            {"op": "set", "path": path, "value": parsed, "create": create, "extend": extend_list},
+            ctx,
+        )
+
+
+def _parse_format(fmt: str, raw: str) -> Any:
+    if fmt in ("json", "pretty_json"):
+        return _json.loads(raw)
+    # fmt == "yaml"
+    return _yaml.safe_load(raw)

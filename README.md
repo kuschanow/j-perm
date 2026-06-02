@@ -2069,6 +2069,86 @@ result = engine.apply(spec, source={"user_input": "-5"}, dest={})
 
 ---
 
+### `deserialize`
+
+Parse a serialized string into a structured value.
+
+```json
+{
+    "op": "deserialize",
+    "from": "/raw_string",
+    // OR: "value": "..." — inline serialized string (mutually exclusive with "from")
+    "format": "json",
+    // Format: "json", "pretty_json" (alias for json), or "yaml"
+    "path": "/result",
+    // Destination pointer
+    "create": true,
+    // Auto-create intermediate nodes (default: true)
+    "extend": true,
+    // Extend list on append (default: true)
+    "default": {}
+    // Fallback value if source pointer fails or parsing fails
+}
+```
+
+Exactly one of `from` or `value` must be specified.
+
+| Format | Description |
+|--------|-------------|
+| `json` | RFC 8259 JSON — compact and pretty-printed both accepted |
+| `pretty_json` | Alias for `json` |
+| `yaml` | YAML document parsed with `yaml.safe_load` |
+
+The `from` pointer supports all context prefixes (`@:`, `&:`, `!:`, `_:`).
+
+**Example — parse JSON from source:**
+
+```python
+spec = {
+    "op": "deserialize",
+    "from": "/payload",
+    "format": "json",
+    "path": "/data",
+}
+
+result = engine.apply(
+    spec,
+    source={"payload": '{"name": "Alice", "age": 30}'},
+    dest={},
+)
+# → {"data": {"name": "Alice", "age": 30}}
+```
+
+**Example — parse YAML with fallback:**
+
+```python
+spec = {
+    "op": "deserialize",
+    "from": "/raw_config",
+    "format": "yaml",
+    "path": "/config",
+    "default": {},
+}
+
+result = engine.apply(spec, source={}, dest={})
+# → {"config": {}}  (source pointer missing, default used)
+```
+
+**Example — inline value:**
+
+```python
+spec = {
+    "op": "deserialize",
+    "value": "[1, 2, 3]",
+    "format": "json",
+    "path": "/items",
+}
+result = engine.apply(spec, source={}, dest={})
+# → {"items": [1, 2, 3]}
+```
+
+---
+
 ## Extending J-Perm
 
 ### Custom Operations
