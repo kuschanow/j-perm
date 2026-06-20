@@ -30,7 +30,7 @@ from .handlers.constructs import (
     gt_handler, gte_handler, lt_handler, lte_handler, eq_handler, ne_handler, in_handler,
     exists_handler,
     # Math
-    add_handler, sub_handler, mul_handler, div_handler, pow_handler, mod_handler,
+    add_handler, sub_handler, mul_handler, div_handler, pow_handler, mod_handler, round_handler,
     # String
     str_split_handler, str_join_handler, str_slice_handler,
     str_upper_handler, str_lower_handler,
@@ -88,6 +88,7 @@ MATH_HANDLERS = {
     "$div": div_handler,
     "$pow": pow_handler,
     "$mod": mod_handler,
+    "$round": round_handler,
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -253,6 +254,7 @@ def get_all_handlers_with_limits(
             max_exponent=pow_max_exponent,
         ),
         "$mod": mod_handler,
+        "$round": round_handler,
         # String handlers with limits
         "$str_split": make_str_split_handler(
             max_results=str_max_split_results,

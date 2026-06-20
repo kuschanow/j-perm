@@ -715,6 +715,42 @@ def mod_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
     return result
 
 
+def round_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$round`` construct: round a number to a given precision.
+
+    Schema::
+
+        {"$round": <value>}
+        {"$round": {"value": <value>, "ndigits": <int>}}
+
+    Behavior:
+    * Simple form: rounds to the nearest integer (Python ``round(value)``)
+    * Dict form: rounds to ``ndigits`` decimal places
+    * Negative ``ndigits`` rounds to tens (−1), hundreds (−2), etc.
+    * Value must be numeric (int or float)
+
+    Examples::
+
+        {"$round": 3.7}                                      → 4
+        {"$round": {"value": 3.14159, "ndigits": 2}}         → 3.14
+        {"$round": {"value": 1234, "ndigits": -2}}           → 1200
+        {"$round": {"value": "${/price}", "ndigits": 2}}     → rounded price
+    """
+    spec = node["$round"]
+
+    if isinstance(spec, dict) and "value" in spec:
+        value = ctx.engine.process_value(spec["value"], ctx)
+        ndigits = ctx.engine.process_value(spec.get("ndigits", None), ctx)
+    else:
+        value = ctx.engine.process_value(spec, ctx)
+        ndigits = None
+
+    if not isinstance(value, (int, float)):
+        raise ValueError(f"$round requires a numeric value, got {type(value).__name__}")
+
+    return round(value, ndigits)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # String operations
 # ─────────────────────────────────────────────────────────────────────────────
