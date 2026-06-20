@@ -904,3 +904,150 @@ class TestRoundOperator:
                 {"/r": {"$round": {"value": "not_a_number", "ndigits": 2}}},
                 source={}, dest={},
             )
+
+    def test_round_invalid_mode_raises(self):
+        """$round raises ValueError for unknown mode."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="mode must be one of"):
+            engine.apply(
+                {"/r": {"$round": {"value": 3.5, "mode": "truncate"}}},
+                source={}, dest={},
+            )
+
+
+class TestRoundMode:
+    """Test $round mode parameter (ceil, floor, round)."""
+
+    def test_ceil_simple(self):
+        """mode=ceil always rounds up to nearest integer."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$round": {"value": 3.1, "mode": "ceil"}}},
+            source={}, dest={},
+        )
+
+        assert result == {"result": 4}
+
+    def test_ceil_exact(self):
+        """mode=ceil on exact integer stays the same."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$round": {"value": 3.0, "mode": "ceil"}}},
+            source={}, dest={},
+        )
+
+        assert result == {"result": 3}
+
+    def test_ceil_negative(self):
+        """mode=ceil on negative number rounds toward zero."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$round": {"value": -3.7, "mode": "ceil"}}},
+            source={}, dest={},
+        )
+
+        assert result == {"result": -3}
+
+    def test_ceil_with_ndigits(self):
+        """mode=ceil with ndigits rounds up at given decimal place."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$round": {"value": 3.141, "ndigits": 2, "mode": "ceil"}}},
+            source={}, dest={},
+        )
+
+        assert result == {"result": 3.15}
+
+    def test_ceil_with_negative_ndigits(self):
+        """mode=ceil with negative ndigits rounds up to given integer magnitude."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$round": {"value": 1201, "ndigits": -2, "mode": "ceil"}}},
+            source={}, dest={},
+        )
+
+        assert result == {"result": 1300}
+
+    def test_floor_simple(self):
+        """mode=floor always rounds down to nearest integer."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$round": {"value": 3.9, "mode": "floor"}}},
+            source={}, dest={},
+        )
+
+        assert result == {"result": 3}
+
+    def test_floor_exact(self):
+        """mode=floor on exact integer stays the same."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$round": {"value": 4.0, "mode": "floor"}}},
+            source={}, dest={},
+        )
+
+        assert result == {"result": 4}
+
+    def test_floor_negative(self):
+        """mode=floor on negative number rounds away from zero."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$round": {"value": -3.1, "mode": "floor"}}},
+            source={}, dest={},
+        )
+
+        assert result == {"result": -4}
+
+    def test_floor_with_ndigits(self):
+        """mode=floor with ndigits rounds down at given decimal place."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$round": {"value": 3.149, "ndigits": 2, "mode": "floor"}}},
+            source={}, dest={},
+        )
+
+        assert result == {"result": 3.14}
+
+    def test_floor_with_negative_ndigits(self):
+        """mode=floor with negative ndigits rounds down to given integer magnitude."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$round": {"value": 1299, "ndigits": -2, "mode": "floor"}}},
+            source={}, dest={},
+        )
+
+        assert result == {"result": 1200}
+
+    def test_mode_round_explicit(self):
+        """mode=round is the same as omitting mode."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$round": {"value": 3.5, "mode": "round"}}},
+            source={}, dest={},
+        )
+
+        assert result == {"result": 4}
+
+    def test_mode_via_template(self):
+        """mode can be set via template substitution."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$round": {"value": 2.3, "mode": "${/rounding_mode}"}}},
+            source={"rounding_mode": "ceil"},
+            dest={},
+        )
+
+        assert result == {"result": 3}
