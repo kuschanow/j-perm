@@ -28,7 +28,7 @@ from .handlers.constructs import (
     ref_handler, eval_handler, and_handler, or_handler, not_handler,
     make_cast_handler,
     gt_handler, gte_handler, lt_handler, lte_handler, eq_handler, ne_handler,
-    div_handler, mod_handler,
+    div_handler, mod_handler, round_handler,
     make_add_handler, make_sub_handler, make_mul_handler, make_pow_handler,
     in_handler, exists_handler,
     # String operations
@@ -211,6 +211,7 @@ def build_default_engine(
                 max_exponent=pow_max_exponent,
             ),
             "$mod": mod_handler,
+            "$round": round_handler,
             # String operations
             "$str_split": make_str_split_handler(
                 max_results=str_max_split_results,

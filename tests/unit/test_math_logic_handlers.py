@@ -769,3 +769,138 @@ class TestMathValidationErrors:
 
         with pytest.raises(ValueError, match="requires a list of at least 1 value"):
             engine.apply({"/r": {"$mod": "bad"}}, source={}, dest={})
+
+
+class TestRoundOperator:
+    """Test $round construct."""
+
+    def test_round_simple_float(self):
+        """$round simple form rounds to nearest integer."""
+        engine = build_default_engine()
+
+        result = engine.apply({"/result": {"$round": 3.7}}, source={}, dest={})
+
+        assert result == {"result": 4}
+
+    def test_round_simple_half_even(self):
+        """$round uses Python banker's rounding (round half to even)."""
+        engine = build_default_engine()
+
+        result = engine.apply({"/result": {"$round": 2.5}}, source={}, dest={})
+
+        assert result == {"result": 2}
+
+    def test_round_positive_ndigits(self):
+        """$round with positive ndigits rounds to decimal places."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$round": {"value": 3.14159, "ndigits": 2}}},
+            source={}, dest={},
+        )
+
+        assert result == {"result": 3.14}
+
+    def test_round_zero_ndigits(self):
+        """$round with ndigits=0 returns integer-valued float."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$round": {"value": 3.7, "ndigits": 0}}},
+            source={}, dest={},
+        )
+
+        assert result == {"result": 4.0}
+
+    def test_round_negative_ndigits_tens(self):
+        """$round with ndigits=-1 rounds to tens."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$round": {"value": 1234, "ndigits": -1}}},
+            source={}, dest={},
+        )
+
+        assert result == {"result": 1230}
+
+    def test_round_negative_ndigits_hundreds(self):
+        """$round with ndigits=-2 rounds to hundreds."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$round": {"value": 1250, "ndigits": -2}}},
+            source={}, dest={},
+        )
+
+        assert result == {"result": 1200}
+
+    def test_round_negative_ndigits_thousands(self):
+        """$round with ndigits=-3 rounds to thousands."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$round": {"value": 5678, "ndigits": -3}}},
+            source={}, dest={},
+        )
+
+        assert result == {"result": 6000}
+
+    def test_round_with_template(self):
+        """$round works with template substitution."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$round": {"value": "${/price}", "ndigits": 2}}},
+            source={"price": 9.9949},
+            dest={},
+        )
+
+        assert result == {"result": 9.99}
+
+    def test_round_with_ref(self):
+        """$round works with $ref."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$round": {"$ref": "/value"}}},
+            source={"value": 2.3},
+            dest={},
+        )
+
+        assert result == {"result": 2}
+
+    def test_round_integer_passthrough(self):
+        """$round on an integer returns integer unchanged."""
+        engine = build_default_engine()
+
+        result = engine.apply({"/result": {"$round": 42}}, source={}, dest={})
+
+        assert result == {"result": 42}
+
+    def test_round_nested_in_expression(self):
+        """$round can be nested with other math operators."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/result": {"$round": {"value": {"$div": [10, 3]}, "ndigits": 2}}},
+            source={}, dest={},
+        )
+
+        assert result == {"result": 3.33}
+
+    def test_round_invalid_type_raises(self):
+        """$round raises ValueError for non-numeric values."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="requires a numeric value"):
+            engine.apply({"/r": {"$round": "hello"}}, source={}, dest={})
+
+    def test_round_invalid_dict_type_raises(self):
+        """$round raises ValueError when dict value is non-numeric."""
+        engine = build_default_engine()
+
+        with pytest.raises(ValueError, match="requires a numeric value"):
+            engine.apply(
+                {"/r": {"$round": {"value": "not_a_number", "ndigits": 2}}},
+                source={}, dest={},
+            )

@@ -1076,6 +1076,23 @@ J-Perm provides mathematical operators with support for 1+ operands:
 {"$mod": [100, 7, 3]}    → 2  ((100 % 7) % 3)
 ```
 
+**`$round` — Rounding**
+
+Rounds a numeric value to a given precision. Supports negative `ndigits` for rounding to tens, hundreds, etc.
+
+```json
+{"$round": 3.7}                                      → 4
+{"$round": {"value": 3.14159, "ndigits": 2}}         → 3.14
+{"$round": {"value": 1234, "ndigits": -1}}           → 1230
+{"$round": {"value": 1234, "ndigits": -2}}           → 1200
+{"$round": {"value": "${/price}", "ndigits": 2}}     → rounded price
+```
+
+- Simple form `{"$round": <value>}` — rounds to the nearest integer (no `ndigits`)
+- Dict form `{"$round": {"value": <value>, "ndigits": <int>}}` — rounds to `ndigits` decimal places
+- Negative `ndigits`: −1 rounds to tens, −2 to hundreds, −3 to thousands, etc.
+- Uses Python's built-in `round()`, which applies banker's rounding (round half to even)
+
 **Nested expressions:**
 
 ```python
@@ -2302,7 +2319,7 @@ from j_perm import (
 - `CORE_HANDLERS` — Core constructs (`$ref`, `$eval`)
 - `LOGICAL_HANDLERS` — Logical operators (`$and`, `$or`, `$not`)
 - `COMPARISON_HANDLERS` — Comparison operators (`$gt`, `$gte`, `$lt`, `$lte`, `$eq`, `$ne`, `$in`, `$exists`)
-- `MATH_HANDLERS` — Mathematical operators with default limits (`$add`, `$sub`, `$mul`, `$div`, `$pow`, `$mod`)
+- `MATH_HANDLERS` — Mathematical operators with default limits (`$add`, `$sub`, `$mul`, `$div`, `$pow`, `$mod`, `$round`)
 - `STRING_HANDLERS` — String operations with default limits (11 constructs)
 - `REGEX_HANDLERS` — Regular expression operations with default limits (5 constructs)
 - `ALL_HANDLERS_NO_CAST` — All handlers except `$cast`
@@ -2879,6 +2896,7 @@ from j_perm import (
     pow_handler,
     make_pow_handler,     # Factory with configurable limits
     mod_handler,
+    round_handler,
 
     # String operations
     str_split_handler,
