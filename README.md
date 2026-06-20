@@ -1078,20 +1078,25 @@ J-Perm provides mathematical operators with support for 1+ operands:
 
 **`$round` — Rounding**
 
-Rounds a numeric value to a given precision. Supports negative `ndigits` for rounding to tens, hundreds, etc.
+Rounds a numeric value to a given precision. Supports negative `ndigits` for rounding to tens, hundreds, etc., and a `mode` parameter to control the direction.
 
 ```json
-{"$round": 3.7}                                      → 4
-{"$round": {"value": 3.14159, "ndigits": 2}}         → 3.14
-{"$round": {"value": 1234, "ndigits": -1}}           → 1230
-{"$round": {"value": 1234, "ndigits": -2}}           → 1200
-{"$round": {"value": "${/price}", "ndigits": 2}}     → rounded price
+{"$round": 3.7}                                                    → 4
+{"$round": {"value": 3.14159, "ndigits": 2}}                       → 3.14
+{"$round": {"value": 3.141, "ndigits": 2, "mode": "ceil"}}         → 3.15
+{"$round": {"value": 3.149, "ndigits": 2, "mode": "floor"}}        → 3.14
+{"$round": {"value": 1234, "ndigits": -2}}                         → 1200
+{"$round": {"value": 1201, "ndigits": -2, "mode": "ceil"}}         → 1300
+{"$round": {"value": "${/price}", "ndigits": 2, "mode": "ceil"}}   → price rounded up
 ```
 
 - Simple form `{"$round": <value>}` — rounds to the nearest integer (no `ndigits`)
-- Dict form `{"$round": {"value": <value>, "ndigits": <int>}}` — rounds to `ndigits` decimal places
-- Negative `ndigits`: −1 rounds to tens, −2 to hundreds, −3 to thousands, etc.
-- Uses Python's built-in `round()`, which applies banker's rounding (round half to even)
+- Dict form `{"$round": {"value": <value>, "ndigits": <int>, "mode": <str>}}`
+- `ndigits` — decimal places (default: `None`, i.e. nearest integer). Negative values: −1 → tens, −2 → hundreds, etc.
+- `mode` (default `"round"`) — rounding direction:
+  - `"round"` — standard rounding (Python `round()`, banker's rounding — round half to even)
+  - `"ceil"` — always round up (`math.ceil`)
+  - `"floor"` — always round down (`math.floor`)
 
 **Nested expressions:**
 
