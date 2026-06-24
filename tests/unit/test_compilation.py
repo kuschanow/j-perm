@@ -1338,3 +1338,105 @@ class TestIfExecuteCompiledEdgeCases:
         # Break inside if inside foreach should propagate correctly
         result = compiled.apply(source={}, dest={"r": 0})
         assert result == {"r": 0}  # foreach completed with break, dest unchanged
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Named-pipeline compilation: Compound.nested_spec_pipeline + Engine.get_pipeline
+# ─────────────────────────────────────────────────────────────────────────────
+
+from j_perm import ActionMatcher, OpMatcher
+
+
+class _DoubleMatcher(ActionMatcher):
+    def matches(self, step):
+        return isinstance(step, dict) and "double" in step
+
+
+class _DoubleHandler(ActionHandler):
+    """Tiny isolated-pipeline op: ``{"double": n}`` → ``n * 2``."""
+    def execute(self, step, ctx):
+        return step["double"] * 2
+
+
+class _WrapHandler(ActionHandler, Compound):
+    """Main-pipeline op whose ``inner`` spec belongs to a named pipeline."""
+    def nested_spec_keys(self, step):
+        return ["inner"] if "inner" in step else []
+
+    def nested_spec_pipeline(self, step, key):
+        return "calc"
+
+    def execute(self, step, ctx):
+        sub = ctx.copy(new_dest={})
+        ctx.engine.run_pipeline("calc", step["inner"], sub)
+        return {"result": sub.dest}
+
+    def execute_compiled(self, step, ctx, nested):
+        sub = ctx.copy(new_dest={})
+        nested["inner"].run(sub)
+        return {"result": sub.dest}
+
+
+def _engine_with_named_pipeline():
+    engine = build_default_engine()
+    reg = ActionTypeRegistry()
+    reg.register(ActionNode(name="double", priority=1,
+                            matcher=_DoubleMatcher(), handler=_DoubleHandler()))
+    engine.register_pipeline("calc", Pipeline(registry=reg))
+    engine.main_pipeline.registry.register(
+        ActionNode(name="wrap", priority=10, matcher=OpMatcher("wrap"), handler=_WrapHandler())
+    )
+    return engine
+
+
+class TestGetPipeline:
+    def test_returns_registered_pipeline(self):
+        engine = _engine_with_named_pipeline()
+        assert isinstance(engine.get_pipeline("calc"), Pipeline)
+
+    def test_unknown_pipeline_raises_keyerror(self):
+        engine = build_default_engine()
+        with pytest.raises(KeyError):
+            engine.get_pipeline("nope")
+
+
+class TestNestedSpecPipeline:
+    def test_default_nested_spec_pipeline_is_none(self):
+        class H(ActionHandler, Compound):
+            def nested_spec_keys(self, step):
+                return []
+            def execute(self, step, ctx):
+                return ctx.dest
+        assert H().nested_spec_pipeline({"k": 1}, "k") is None
+
+    def test_compiled_nested_spec_runs_on_named_pipeline(self):
+        engine = _engine_with_named_pipeline()
+        compiled = engine.compile([{"op": "wrap", "inner": {"double": 5}}])
+        # the nested spec was compiled against the "calc" pipeline
+        nested = compiled.steps[0].nested["inner"]
+        assert nested._pipeline is engine.get_pipeline("calc")
+        assert compiled.apply(source={}, dest={}) == {"result": 10}
+
+    def test_interpreted_path_matches_compiled(self):
+        engine = _engine_with_named_pipeline()
+        assert engine.apply({"op": "wrap", "inner": {"double": 3}},
+                            source={}, dest={}) == {"result": 6}
+
+
+class TestCompiledSpecOwningPipeline:
+    def test_run_uses_owning_pipeline(self):
+        engine = build_default_engine()
+        compiled = engine.compile([{"op": "set", "path": "/x", "value": 7}])
+        assert compiled._pipeline is engine.main_pipeline
+
+    def test_run_falls_back_to_main_when_pipeline_none(self):
+        engine = build_default_engine()
+        compiled = engine.compile([{"op": "set", "path": "/x", "value": 9}])
+        compiled._pipeline = None  # e.g. an unpickled spec
+        ctx = ExecutionContext(source={}, dest={}, engine=engine)
+        assert compiled.run(ctx) == {"x": 9}
+
+    def test_pickle_resets_pipeline_to_none(self):
+        engine = build_default_engine()
+        compiled = engine.compile([{"op": "set", "path": "/x", "value": 1}])
+        restored = pickle.loads(pickle.dumps(compiled))
+        assert restored._pipeline is None

@@ -25,6 +25,7 @@ Execution flow (``Engine.apply`` entry point)::
 from __future__ import annotations
 
 import copy
+import inspect
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -549,6 +550,20 @@ class Compound(ABC):
         will skip missing keys automatically, but being explicit is cleaner.
         """
 
+    def nested_spec_pipeline(self, step: Any, key: str) -> Optional[str]:
+        """Return the name of the pipeline a nested spec should compile against.
+
+        By default (``None``) a nested spec is compiled — and later executed —
+        against the *same* pipeline that owns this handler (``foreach``/``if``
+        bodies are plain main-pipeline scripts).  Return a registered pipeline
+        name to have :meth:`Pipeline.compile` compile *step[key]* against a
+        different, isolated pipeline instead — e.g. a plugin whose nested spec
+        is written in its own dialect and resolves through its own registry.
+        The engine stays oblivious to the plugin: it merely looks the name up
+        in its named-pipeline registry.
+        """
+        return None
+
     def execute_compiled(
             self,
             step: Any,
@@ -760,10 +775,16 @@ class CompiledSpec:
             steps: List[CompiledStep],
             source_spec: Any,
             engine: Optional['Engine'] = None,
+            pipeline: Optional['Pipeline'] = None,
     ) -> None:
         self.steps = steps
         self._source_spec = source_spec
         self._engine = engine
+        #: The pipeline that compiled (and must execute) this spec.  ``None``
+        #: for specs restored from a pickle — :meth:`run` then falls back to the
+        #: engine's ``main_pipeline``.  Set so that a spec compiled against an
+        #: isolated/named pipeline runs through that pipeline, not the main one.
+        self._pipeline = pipeline
 
     # -- execution --------------------------------------------------------------
 
@@ -775,7 +796,8 @@ class CompiledSpec:
 
         Returns a deep copy of ``ctx.dest`` after execution.
         """
-        ctx.engine.main_pipeline.run_compiled(self, ctx)
+        pipeline = self._pipeline if self._pipeline is not None else ctx.engine.main_pipeline
+        pipeline.run_compiled(self, ctx)
         return copy.deepcopy(ctx.dest)
 
     def apply(
@@ -833,6 +855,7 @@ class CompiledSpec:
     def __setstate__(self, state: dict) -> None:
         self.__dict__.update(state)
         self._engine = None
+        self._pipeline = None
 
     # -- repr -------------------------------------------------------------------
 
@@ -1040,13 +1063,15 @@ class Pipeline:
                 if isinstance(handler, Compound):
                     for key in handler.nested_spec_keys(step):
                         if isinstance(step, dict) and key in step and step[key] is not None:
-                            sub = self.compile(step[key], ctx)
+                            target_name = handler.nested_spec_pipeline(step, key)
+                            target = ctx.engine.get_pipeline(target_name) if target_name is not None else self
+                            sub = target.compile(step[key], ctx)
                             if sub is not None:
                                 nested[key] = sub
 
             compiled_steps.append(CompiledStep(step=step, handlers=handlers, nested=nested))
 
-        return CompiledSpec(steps=compiled_steps, source_spec=original_spec)
+        return CompiledSpec(steps=compiled_steps, source_spec=original_spec, pipeline=self)
 
     def run_compiled(self, compiled: 'CompiledSpec', ctx: 'ExecutionContext') -> None:
         """Execute a :class:`CompiledSpec` — skip stages and matcher resolution.
@@ -1132,10 +1157,8 @@ class Pipeline:
 
                 try:
                     if isinstance(handler, Compound) and compiled_step.nested:
-                        if isinstance(handler, AsyncActionHandler):
-                            ctx.dest = await handler.execute(step, ctx)
-                        else:
-                            ctx.dest = handler.execute_compiled(step, ctx, compiled_step.nested)
+                        result = handler.execute_compiled(step, ctx, compiled_step.nested)
+                        ctx.dest = await result if inspect.isawaitable(result) else result
                     else:
                         if isinstance(handler, AsyncActionHandler):
                             ctx.dest = await handler.execute(step, ctx)
@@ -1244,6 +1267,16 @@ class Engine:
     def register_pipeline(self, name: str, pipeline: Pipeline) -> None:
         """Register a named pipeline (callable via ``run_pipeline``)."""
         self._pipelines[name] = pipeline
+
+    def get_pipeline(self, name: str) -> Pipeline:
+        """Return the named pipeline registered under *name*.
+
+        Raises ``KeyError`` if no pipeline is registered under that name.
+        Used by :meth:`Pipeline.compile` to compile a compound handler's nested
+        spec against an isolated pipeline (see ``Compound.nested_spec_pipeline``)
+        and by handlers that dispatch a compiled sub-spec through it.
+        """
+        return self._pipelines[name]
 
     def register_custom_function(self, name: str, func: Callable[[Any], Any]) -> None:
         """Add a custom function as an Engine method (callable from handlers)."""
