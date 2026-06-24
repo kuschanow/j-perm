@@ -42,7 +42,7 @@ from .core import (
     UnescapeRule
 )
 # -- factory -------------------------------------------------------
-from .factory import build_default_engine
+from .factory import build_default_engine, build_default_async_engine
 # -- handlers (grouped by logical system) --------------------------
 from .handlers import (
     # template
@@ -313,6 +313,7 @@ __all__ = [
     "PointerProcessor",
     # factory
     "build_default_engine",
+    "build_default_async_engine",
     # casters
     "BUILTIN_CASTERS",
     # construct groups

@@ -39,6 +39,213 @@ from ..core import ExecutionContext
 _MISSING = object()
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Pure compute helpers — shared by the sync constructs (below) and their async
+# twins in ``constructs_async.py``.  They take already-resolved operands and the
+# relevant security limits, so the limit logic is single-sourced across both
+# value pipelines.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _add_reduce(values: list, max_number_result: float, max_string_result: int) -> Any:
+    result = values[0]
+    for val in values[1:]:
+        result = result + val
+        if isinstance(result, (int, float)):
+            if abs(result) > max_number_result:
+                raise ValueError(
+                    f"Addition result {result} exceeds numeric limit of {max_number_result}"
+                )
+        elif isinstance(result, str):
+            if len(result) > max_string_result:
+                raise ValueError(
+                    f"Addition result string length {len(result)} exceeds limit of {max_string_result}"
+                )
+    return result
+
+
+def _sub_reduce(values: list, max_number_result: float) -> Any:
+    result = values[0]
+    for val in values[1:]:
+        result = result - val
+        if isinstance(result, (int, float)):
+            if abs(result) > max_number_result:
+                raise ValueError(
+                    f"Subtraction result {result} exceeds numeric limit of {max_number_result}"
+                )
+    return result
+
+
+def _mul_reduce(values: list, max_string_result: int, max_operand: float) -> Any:
+    result = values[0]
+    for val in values[1:]:
+        if isinstance(result, str) and isinstance(val, (int, float)):
+            potential_length = len(result) * abs(val)
+            if potential_length > max_string_result:
+                raise ValueError(
+                    f"String multiplication would create string of length {potential_length}, "
+                    f"exceeding limit of {max_string_result}"
+                )
+        elif isinstance(val, str) and isinstance(result, (int, float)):
+            potential_length = len(val) * abs(result)
+            if potential_length > max_string_result:
+                raise ValueError(
+                    f"String multiplication would create string of length {potential_length}, "
+                    f"exceeding limit of {max_string_result}"
+                )
+        elif isinstance(result, (int, float)) and isinstance(val, (int, float)):
+            if abs(val) > max_operand:
+                raise ValueError(
+                    f"Numeric operand {val} exceeds limit of {max_operand}"
+                )
+        result = result * val
+    return result
+
+
+def _pow_reduce(values: list, max_base: float, max_exponent: float) -> Any:
+    result = values[0]
+    if isinstance(result, (int, float)) and abs(result) > max_base:
+        raise ValueError(f"Base value {result} exceeds limit of {max_base}")
+    for val in values[1:]:
+        if isinstance(val, (int, float)) and abs(val) > max_exponent:
+            raise ValueError(f"Exponent value {val} exceeds limit of {max_exponent}")
+        result = result ** val
+        if isinstance(result, (int, float)) and abs(result) > max_base:
+            raise ValueError(f"Intermediate result {result} exceeds base limit of {max_base}")
+    return result
+
+
+def _round_compute(value: Any, ndigits: Any, mode: Any) -> Any:
+    if not isinstance(value, (int, float)):
+        raise ValueError(f"$round requires a numeric value, got {type(value).__name__}")
+    if mode not in _ROUND_MODES:
+        raise ValueError(
+            f"$round mode must be one of {sorted(_ROUND_MODES)}, got '{mode}'"
+        )
+    if mode == "round":
+        return round(value, ndigits)
+    if ndigits is None:
+        return math.ceil(value) if mode == "ceil" else math.floor(value)
+    factor = 10.0 ** ndigits
+    if mode == "ceil":
+        return math.ceil(value * factor) / factor
+    return math.floor(value * factor) / factor
+
+
+def _split_compute(string: Any, delimiter: Any, maxsplit: Any, max_results: int) -> Any:
+    if not isinstance(string, str):
+        raise ValueError(f"$str_split 'string' must be a string, got {type(string).__name__}")
+    if maxsplit < 0 or maxsplit > max_results:
+        maxsplit = max_results
+    result = string.split(delimiter, maxsplit)
+    if len(result) > max_results:
+        raise ValueError(
+            f"Split operation would create {len(result)} items, "
+            f"exceeding limit of {max_results}"
+        )
+    return result
+
+
+def _join_compute(array: Any, separator: Any, max_result_length: int) -> Any:
+    if not isinstance(array, (list, tuple)):
+        raise ValueError(f"$str_join 'array' must be a list, got {type(array).__name__}")
+    array_len = len(array)
+    if array_len > 0:
+        str_items = [str(item) for item in array]
+        total_length = sum(len(s) for s in str_items) + len(separator) * (array_len - 1)
+        if total_length > max_result_length:
+            raise ValueError(
+                f"Join operation would create string of length {total_length}, "
+                f"exceeding limit of {max_result_length}"
+            )
+        return separator.join(str_items)
+    return ""
+
+
+def _replace_compute(string: Any, old: Any, new: Any, count: Any, max_result_length: int) -> Any:
+    if not isinstance(string, str):
+        raise ValueError(f"$str_replace 'string' must be a string, got {type(string).__name__}")
+    if old:
+        occurrences = string.count(old)
+        if count >= 0:
+            occurrences = min(occurrences, count)
+        estimated_length = len(string) - (occurrences * len(old)) + (occurrences * len(new))
+        if estimated_length > max_result_length:
+            raise ValueError(
+                f"Replace operation would create string of length {estimated_length}, "
+                f"exceeding limit of {max_result_length}"
+            )
+    return string.replace(old, new, count)
+
+
+def _resolve_allowed_flags(allowed_flags: int | None) -> int:
+    """Normalise the ``allowed_flags`` argument shared by the regex handlers."""
+    if allowed_flags is None:
+        return re.IGNORECASE | re.MULTILINE | re.DOTALL | re.VERBOSE | re.ASCII
+    if allowed_flags == -1:
+        return 0xFFFFFFFF
+    return allowed_flags
+
+
+def _validate_regex_flags(key: str, flags: int, resolved_flags: int) -> None:
+    if flags & ~resolved_flags:
+        raise ValueError(
+            f"Regex flags {flags} contain disallowed flags. "
+            f"Allowed flags bitmask: {resolved_flags}"
+        )
+
+
+def _regex_match_compute(key, pattern, string, flags, resolved_flags, timeout):
+    if not isinstance(string, str):
+        raise ValueError(f"{key} 'string' must be a string, got {type(string).__name__}")
+    _validate_regex_flags(key, flags, resolved_flags)
+    try:
+        return bool(regex.fullmatch(pattern, string, flags, timeout=timeout))
+    except TimeoutError:
+        raise TimeoutError(f"Regex operation exceeded timeout of {timeout}s")
+
+
+def _regex_search_compute(key, pattern, string, flags, resolved_flags, timeout):
+    if not isinstance(string, str):
+        raise ValueError(f"{key} 'string' must be a string, got {type(string).__name__}")
+    _validate_regex_flags(key, flags, resolved_flags)
+    try:
+        match = regex.search(pattern, string, flags, timeout=timeout)
+        return match.group(0) if match else None
+    except TimeoutError:
+        raise TimeoutError(f"Regex operation exceeded timeout of {timeout}s")
+
+
+def _regex_findall_compute(key, pattern, string, flags, resolved_flags, timeout):
+    if not isinstance(string, str):
+        raise ValueError(f"{key} 'string' must be a string, got {type(string).__name__}")
+    _validate_regex_flags(key, flags, resolved_flags)
+    try:
+        return regex.findall(pattern, string, flags, timeout=timeout)
+    except TimeoutError:
+        raise TimeoutError(f"Regex operation exceeded timeout of {timeout}s")
+
+
+def _regex_groups_compute(key, pattern, string, flags, resolved_flags, timeout):
+    if not isinstance(string, str):
+        raise ValueError(f"{key} 'string' must be a string, got {type(string).__name__}")
+    _validate_regex_flags(key, flags, resolved_flags)
+    try:
+        match = regex.search(pattern, string, flags, timeout=timeout)
+        return list(match.groups()) if match else []
+    except TimeoutError:
+        raise TimeoutError(f"Regex operation exceeded timeout of {timeout}s")
+
+
+def _regex_replace_compute(pattern, replacement, string, count, flags, resolved_flags, timeout):
+    if not isinstance(string, str):
+        raise ValueError(f"$regex_replace 'string' must be a string, got {type(string).__name__}")
+    _validate_regex_flags("$regex_replace", flags, resolved_flags)
+    try:
+        return regex.sub(pattern, replacement, string, count, flags, timeout=timeout)
+    except TimeoutError:
+        raise TimeoutError(f"Regex operation exceeded timeout of {timeout}s")
+
+
 def ref_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
     """``$ref`` construct: resolve pointer from source or dest.
 
@@ -426,24 +633,7 @@ def make_add_handler(
             raise ValueError("$add requires a list of at least 1 value")
 
         values = [ctx.engine.process_value(v, ctx) for v in node["$add"]]
-
-        result = values[0]
-        for val in values[1:]:
-            result = result + val
-
-            # Check limits after each addition
-            if isinstance(result, (int, float)):
-                if abs(result) > max_number_result:
-                    raise ValueError(
-                        f"Addition result {result} exceeds numeric limit of {max_number_result}"
-                    )
-            elif isinstance(result, str):
-                if len(result) > max_string_result:
-                    raise ValueError(
-                        f"Addition result string length {len(result)} exceeds limit of {max_string_result}"
-                    )
-
-        return result
+        return _add_reduce(values, max_number_result, max_string_result)
 
     return add_handler
 
@@ -488,19 +678,7 @@ def make_sub_handler(
             raise ValueError("$sub requires a list of at least 1 value")
 
         values = [ctx.engine.process_value(v, ctx) for v in node["$sub"]]
-
-        result = values[0]
-        for val in values[1:]:
-            result = result - val
-
-            # Check limits after each subtraction
-            if isinstance(result, (int, float)):
-                if abs(result) > max_number_result:
-                    raise ValueError(
-                        f"Subtraction result {result} exceeds numeric limit of {max_number_result}"
-                    )
-
-        return result
+        return _sub_reduce(values, max_number_result)
 
     return sub_handler
 
@@ -548,34 +726,7 @@ def make_mul_handler(
             raise ValueError("$mul requires a list of at least 1 value")
 
         values = [ctx.engine.process_value(v, ctx) for v in node["$mul"]]
-
-        result = values[0]
-        for val in values[1:]:
-            # Check for string multiplication DoS
-            if isinstance(result, str) and isinstance(val, (int, float)):
-                potential_length = len(result) * abs(val)
-                if potential_length > max_string_result:
-                    raise ValueError(
-                        f"String multiplication would create string of length {potential_length}, "
-                        f"exceeding limit of {max_string_result}"
-                    )
-            elif isinstance(val, str) and isinstance(result, (int, float)):
-                potential_length = len(val) * abs(result)
-                if potential_length > max_string_result:
-                    raise ValueError(
-                        f"String multiplication would create string of length {potential_length}, "
-                        f"exceeding limit of {max_string_result}"
-                    )
-            # Check numeric operand limits
-            elif isinstance(result, (int, float)) and isinstance(val, (int, float)):
-                if abs(val) > max_operand:
-                    raise ValueError(
-                        f"Numeric operand {val} exceeds limit of {max_operand}"
-                    )
-
-            result = result * val
-
-        return result
+        return _mul_reduce(values, max_string_result, max_operand)
 
     return mul_handler
 
@@ -653,31 +804,7 @@ def make_pow_handler(
             raise ValueError("$pow requires a list of at least 1 value")
 
         values = [ctx.engine.process_value(v, ctx) for v in node["$pow"]]
-
-        result = values[0]
-
-        # Check first value (base)
-        if isinstance(result, (int, float)) and abs(result) > max_base:
-            raise ValueError(
-                f"Base value {result} exceeds limit of {max_base}"
-            )
-
-        for val in values[1:]:
-            # Check exponent
-            if isinstance(val, (int, float)) and abs(val) > max_exponent:
-                raise ValueError(
-                    f"Exponent value {val} exceeds limit of {max_exponent}"
-                )
-
-            result = result ** val
-
-            # Check intermediate result if it becomes a new base
-            if isinstance(result, (int, float)) and abs(result) > max_base:
-                raise ValueError(
-                    f"Intermediate result {result} exceeds base limit of {max_base}"
-                )
-
-        return result
+        return _pow_reduce(values, max_base, max_exponent)
 
     return pow_handler
 
@@ -758,25 +885,7 @@ def round_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
         ndigits = None
         mode = "round"
 
-    if not isinstance(value, (int, float)):
-        raise ValueError(f"$round requires a numeric value, got {type(value).__name__}")
-
-    if mode not in _ROUND_MODES:
-        raise ValueError(
-            f"$round mode must be one of {sorted(_ROUND_MODES)}, got '{mode}'"
-        )
-
-    if mode == "round":
-        return round(value, ndigits)
-
-    # ceil/floor: scale by factor to support ndigits
-    if ndigits is None:
-        return math.ceil(value) if mode == "ceil" else math.floor(value)
-
-    factor = 10.0 ** ndigits
-    if mode == "ceil":
-        return math.ceil(value * factor) / factor
-    return math.floor(value * factor) / factor
+    return _round_compute(value, ndigits, mode)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -823,24 +932,7 @@ def make_str_split_handler(
         string = ctx.engine.process_value(spec.get("string", ""), ctx)
         delimiter = ctx.engine.process_value(spec.get("delimiter", " "), ctx)
         maxsplit = ctx.engine.process_value(spec.get("maxsplit", -1), ctx)
-
-        if not isinstance(string, str):
-            raise ValueError(f"$str_split 'string' must be a string, got {type(string).__name__}")
-
-        # Limit maxsplit to prevent DoS
-        if maxsplit < 0 or maxsplit > max_results:
-            maxsplit = max_results
-
-        result = string.split(delimiter, maxsplit)
-
-        # Check result size
-        if len(result) > max_results:
-            raise ValueError(
-                f"Split operation would create {len(result)} items, "
-                f"exceeding limit of {max_results}"
-            )
-
-        return result
+        return _split_compute(string, delimiter, maxsplit, max_results)
 
     return str_split_handler
 
@@ -885,26 +977,7 @@ def make_str_join_handler(
 
         array = ctx.engine.process_value(spec.get("array", []), ctx)
         separator = ctx.engine.process_value(spec.get("separator", ""), ctx)
-
-        if not isinstance(array, (list, tuple)):
-            raise ValueError(f"$str_join 'array' must be a list, got {type(array).__name__}")
-
-        # Estimate result length before joining
-        array_len = len(array)
-        if array_len > 0:
-            # Convert items to strings and calculate total length
-            str_items = [str(item) for item in array]
-            total_length = sum(len(s) for s in str_items) + len(separator) * (array_len - 1)
-
-            if total_length > max_result_length:
-                raise ValueError(
-                    f"Join operation would create string of length {total_length}, "
-                    f"exceeding limit of {max_result_length}"
-                )
-
-            return separator.join(str_items)
-
-        return ""
+        return _join_compute(array, separator, max_result_length)
 
     return str_join_handler
 
@@ -1122,27 +1195,7 @@ def make_str_replace_handler(
         old = ctx.engine.process_value(spec["old"], ctx)
         new = ctx.engine.process_value(spec["new"], ctx)
         count = ctx.engine.process_value(spec.get("count", -1), ctx)
-
-        if not isinstance(string, str):
-            raise ValueError(f"$str_replace 'string' must be a string, got {type(string).__name__}")
-
-        # Estimate result length
-        if old:
-            occurrences = string.count(old)
-            if count >= 0:
-                occurrences = min(occurrences, count)
-
-            # Calculate potential result length
-            # result_len = original_len - (occurrences * len(old)) + (occurrences * len(new))
-            estimated_length = len(string) - (occurrences * len(old)) + (occurrences * len(new))
-
-            if estimated_length > max_result_length:
-                raise ValueError(
-                    f"Replace operation would create string of length {estimated_length}, "
-                    f"exceeding limit of {max_result_length}"
-                )
-
-        return string.replace(old, new, count)
+        return _replace_compute(string, old, new, count, max_result_length)
 
     return str_replace_handler
 
@@ -1240,12 +1293,7 @@ def make_regex_match_handler(
     Returns:
         Handler function for ``$regex_match`` construct.
     """
-    # Default allowed flags: IGNORECASE, MULTILINE, DOTALL, VERBOSE, ASCII
-    if allowed_flags is None:
-        allowed_flags = re.IGNORECASE | re.MULTILINE | re.DOTALL | re.VERBOSE | re.ASCII
-    elif allowed_flags == -1:
-        # Special value to allow all flags (not recommended for untrusted input)
-        allowed_flags = 0xFFFFFFFF  # Allow all possible flags
+    resolved_flags = _resolve_allowed_flags(allowed_flags)
 
     def regex_match_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
         """``$regex_match`` construct: check if string matches regex pattern.
@@ -1271,21 +1319,7 @@ def make_regex_match_handler(
         pattern = ctx.engine.process_value(spec["pattern"], ctx)
         string = ctx.engine.process_value(spec.get("string", ""), ctx)
         flags = ctx.engine.process_value(spec.get("flags", 0), ctx)
-
-        if not isinstance(string, str):
-            raise ValueError(f"$regex_match 'string' must be a string, got {type(string).__name__}")
-
-        # Validate flags
-        if flags & ~allowed_flags:
-            raise ValueError(
-                f"Regex flags {flags} contain disallowed flags. "
-                f"Allowed flags bitmask: {allowed_flags}"
-            )
-
-        try:
-            return bool(regex.fullmatch(pattern, string, flags, timeout=timeout))
-        except TimeoutError:
-            raise TimeoutError(f"Regex operation exceeded timeout of {timeout}s")
+        return _regex_match_compute("$regex_match", pattern, string, flags, resolved_flags, timeout)
 
     return regex_match_handler
 
@@ -1305,10 +1339,7 @@ def make_regex_search_handler(
         allowed_flags: Bitmask of allowed flags. None means default safe flags.
                       Use -1 to allow all flags (not recommended for untrusted input).
     """
-    if allowed_flags is None:
-        allowed_flags = re.IGNORECASE | re.MULTILINE | re.DOTALL | re.VERBOSE | re.ASCII
-    elif allowed_flags == -1:
-        allowed_flags = 0xFFFFFFFF
+    resolved_flags = _resolve_allowed_flags(allowed_flags)
 
     def regex_search_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
         """``$regex_search`` construct: search for first occurrence of pattern.
@@ -1332,21 +1363,7 @@ def make_regex_search_handler(
         pattern = ctx.engine.process_value(spec["pattern"], ctx)
         string = ctx.engine.process_value(spec.get("string", ""), ctx)
         flags = ctx.engine.process_value(spec.get("flags", 0), ctx)
-
-        if not isinstance(string, str):
-            raise ValueError(f"$regex_search 'string' must be a string, got {type(string).__name__}")
-
-        if flags & ~allowed_flags:
-            raise ValueError(
-                f"Regex flags {flags} contain disallowed flags. "
-                f"Allowed flags bitmask: {allowed_flags}"
-            )
-
-        try:
-            match = regex.search(pattern, string, flags, timeout=timeout)
-            return match.group(0) if match else None
-        except TimeoutError:
-            raise TimeoutError(f"Regex operation exceeded timeout of {timeout}s")
+        return _regex_search_compute("$regex_search", pattern, string, flags, resolved_flags, timeout)
 
     return regex_search_handler
 
@@ -1365,10 +1382,7 @@ def make_regex_findall_handler(
         allowed_flags: Bitmask of allowed flags. None means default safe flags.
                       Use -1 to allow all flags (not recommended for untrusted input).
     """
-    if allowed_flags is None:
-        allowed_flags = re.IGNORECASE | re.MULTILINE | re.DOTALL | re.VERBOSE | re.ASCII
-    elif allowed_flags == -1:
-        allowed_flags = 0xFFFFFFFF
+    resolved_flags = _resolve_allowed_flags(allowed_flags)
 
     def regex_findall_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
         """``$regex_findall`` construct: find all occurrences of pattern.
@@ -1392,20 +1406,7 @@ def make_regex_findall_handler(
         pattern = ctx.engine.process_value(spec["pattern"], ctx)
         string = ctx.engine.process_value(spec.get("string", ""), ctx)
         flags = ctx.engine.process_value(spec.get("flags", 0), ctx)
-
-        if not isinstance(string, str):
-            raise ValueError(f"$regex_findall 'string' must be a string, got {type(string).__name__}")
-
-        if flags & ~allowed_flags:
-            raise ValueError(
-                f"Regex flags {flags} contain disallowed flags. "
-                f"Allowed flags bitmask: {allowed_flags}"
-            )
-
-        try:
-            return regex.findall(pattern, string, flags, timeout=timeout)
-        except TimeoutError:
-            raise TimeoutError(f"Regex operation exceeded timeout of {timeout}s")
+        return _regex_findall_compute("$regex_findall", pattern, string, flags, resolved_flags, timeout)
 
     return regex_findall_handler
 
@@ -1424,10 +1425,7 @@ def make_regex_replace_handler(
         allowed_flags: Bitmask of allowed flags. None means default safe flags.
                       Use -1 to allow all flags (not recommended for untrusted input).
     """
-    if allowed_flags is None:
-        allowed_flags = re.IGNORECASE | re.MULTILINE | re.DOTALL | re.VERBOSE | re.ASCII
-    elif allowed_flags == -1:
-        allowed_flags = 0xFFFFFFFF
+    resolved_flags = _resolve_allowed_flags(allowed_flags)
 
     def regex_replace_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
         """``$regex_replace`` construct: replace pattern matches in string.
@@ -1456,20 +1454,8 @@ def make_regex_replace_handler(
         string = ctx.engine.process_value(spec.get("string", ""), ctx)
         count = ctx.engine.process_value(spec.get("count", 0), ctx)
         flags = ctx.engine.process_value(spec.get("flags", 0), ctx)
-
-        if not isinstance(string, str):
-            raise ValueError(f"$regex_replace 'string' must be a string, got {type(string).__name__}")
-
-        if flags & ~allowed_flags:
-            raise ValueError(
-                f"Regex flags {flags} contain disallowed flags. "
-                f"Allowed flags bitmask: {allowed_flags}"
-            )
-
-        try:
-            return regex.sub(pattern, replacement, string, count, flags, timeout=timeout)
-        except TimeoutError:
-            raise TimeoutError(f"Regex operation exceeded timeout of {timeout}s")
+        return _regex_replace_compute(
+            pattern, replacement, string, count, flags, resolved_flags, timeout)
 
     return regex_replace_handler
 
@@ -1488,10 +1474,7 @@ def make_regex_groups_handler(
         allowed_flags: Bitmask of allowed flags. None means default safe flags.
                       Use -1 to allow all flags (not recommended for untrusted input).
     """
-    if allowed_flags is None:
-        allowed_flags = re.IGNORECASE | re.MULTILINE | re.DOTALL | re.VERBOSE | re.ASCII
-    elif allowed_flags == -1:
-        allowed_flags = 0xFFFFFFFF
+    resolved_flags = _resolve_allowed_flags(allowed_flags)
 
     def regex_groups_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
         """``$regex_groups`` construct: extract capture groups from pattern match.
@@ -1517,21 +1500,7 @@ def make_regex_groups_handler(
         pattern = ctx.engine.process_value(spec["pattern"], ctx)
         string = ctx.engine.process_value(spec.get("string", ""), ctx)
         flags = ctx.engine.process_value(spec.get("flags", 0), ctx)
-
-        if not isinstance(string, str):
-            raise ValueError(f"$regex_groups 'string' must be a string, got {type(string).__name__}")
-
-        if flags & ~allowed_flags:
-            raise ValueError(
-                f"Regex flags {flags} contain disallowed flags. "
-                f"Allowed flags bitmask: {allowed_flags}"
-            )
-
-        try:
-            match = regex.search(pattern, string, flags, timeout=timeout)
-            return list(match.groups()) if match else []
-        except TimeoutError:
-            raise TimeoutError(f"Regex operation exceeded timeout of {timeout}s")
+        return _regex_groups_compute("$regex_groups", pattern, string, flags, resolved_flags, timeout)
 
     return regex_groups_handler
 

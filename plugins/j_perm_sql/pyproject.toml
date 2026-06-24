@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "j-perm-sql"
-version = "0.3.0"
+version = "0.4.0"
 description = "j-perm plugin for SQL"
 authors = [
     { name = "Roman", email = "kuschanow@gmail.com" },
@@ -18,7 +18,7 @@ requires-python = ">=3.10"
 license = { text = "MIT" }
 
 dependencies = [
-    "j-perm>=1.10.0",
+    "j-perm>=1.11.0",
 ]
 
 [tool.pytest.ini_options]

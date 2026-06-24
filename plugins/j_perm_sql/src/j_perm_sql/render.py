@@ -17,10 +17,18 @@ from __future__ import annotations
 
 from typing import Any
 
+from j_perm.handlers.signals import ControlFlowSignal
+
 from .dialect import PLACEHOLDER, RenderOptions
 
 #: Name the read-only SQL value-pipeline is registered under on the engine.
 SQL_PIPELINE_NAME = "sql"
+
+#: Metadata key carrying the async value cache (``{id(node): resolved}``) on the
+#: *async* render path.  Its presence is what switches :func:`resolve_value` from
+#: resolving inline (sync) to the resolve-on-demand-with-restart protocol used by
+#: :meth:`j_perm_sql.handler.SqlRenderer.render_async`.
+ASYNC_VALUE_CACHE_KEY = "_sql_async_value_cache"
 
 #: Metadata key carrying the name of the pipeline that recursion should dispatch
 #: through.  Set by :class:`~j_perm_sql.handler.SqlRenderer` so a write
@@ -39,6 +47,37 @@ COMPILE_CACHE_KEY = "_sql_compile_cache"
 _QUERY_KEYS = frozenset(
     {"$select", "$union", "$union_all", "$intersect", "$except", "$values"}
 )
+
+
+class _NeedAsyncValue(ControlFlowSignal):
+    """Raised mid-render to ask the async driver to resolve a value node.
+
+    Subclasses :class:`~j_perm.handlers.signals.ControlFlowSignal` so it
+    propagates straight up through the (synchronous) SQL pipeline without being
+    annotated or logged, and is caught only by
+    :meth:`j_perm_sql.handler.SqlRenderer.render_async`.
+    """
+
+    def __init__(self, node: Any) -> None:
+        self.node = node
+
+
+def resolve_value(node: Any, ctx) -> Any:
+    """Resolve an embedded engine value (``$val`` / ``$in`` / ``$values`` cell).
+
+    * Sync render (no async cache in metadata) → resolve inline via
+      ``process_value``.
+    * Async render → consult the per-render cache keyed by ``id(node)``; on a
+      miss, raise :class:`_NeedAsyncValue` so the async driver can
+      ``await process_value_async`` and restart the render with the value cached.
+    """
+    cache = ctx.metadata.get(ASYNC_VALUE_CACHE_KEY)
+    if cache is None:
+        return ctx.engine.process_value(node, ctx)
+    key = id(node)
+    if key in cache:
+        return cache[key]
+    raise _NeedAsyncValue(node)
 
 
 def fragment(sql: str, params: list | None = None) -> dict:

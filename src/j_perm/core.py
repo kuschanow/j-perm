@@ -579,6 +579,25 @@ class Compound(ABC):
         """
         return self.execute(step, ctx)  # type: ignore[attr-defined]
 
+    async def execute_compiled_async(
+            self,
+            step: Any,
+            ctx: 'ExecutionContext',
+            nested: dict[str, 'CompiledSpec'],
+    ) -> Any:
+        """Async version of :meth:`execute_compiled`.
+
+        Called by :meth:`Pipeline.run_compiled_async`.  The default awaits the
+        synchronous :meth:`execute_compiled` result if it happens to be a
+        coroutine (the pattern used by handlers whose ``execute_compiled`` is
+        itself ``async def``, e.g. the SQL plugin), otherwise returns it as-is.
+        Compound handlers that recurse into nested bodies should override this
+        to run those bodies via ``compiled_body.run_async(sub_ctx)`` /
+        ``ctx.engine.apply_to_context_async(...)``.
+        """
+        result = self.execute_compiled(step, ctx, nested)
+        return await result if inspect.isawaitable(result) else result
+
 
 @dataclass
 class ActionNode:
@@ -798,6 +817,17 @@ class CompiledSpec:
         """
         pipeline = self._pipeline if self._pipeline is not None else ctx.engine.main_pipeline
         pipeline.run_compiled(self, ctx)
+        return copy.deepcopy(ctx.dest)
+
+    async def run_async(self, ctx: 'ExecutionContext') -> Any:
+        """Async version of :meth:`run`.
+
+        Drives :meth:`Pipeline.run_compiled_async` so that any
+        ``AsyncActionHandler`` reached through the compiled steps (directly or
+        inside compound bodies) is awaited.  Returns a deep copy of ``ctx.dest``.
+        """
+        pipeline = self._pipeline if self._pipeline is not None else ctx.engine.main_pipeline
+        await pipeline.run_compiled_async(self, ctx)
         return copy.deepcopy(ctx.dest)
 
     def apply(
@@ -1157,13 +1187,11 @@ class Pipeline:
 
                 try:
                     if isinstance(handler, Compound) and compiled_step.nested:
-                        result = handler.execute_compiled(step, ctx, compiled_step.nested)
-                        ctx.dest = await result if inspect.isawaitable(result) else result
+                        ctx.dest = await handler.execute_compiled_async(step, ctx, compiled_step.nested)
+                    elif isinstance(handler, AsyncActionHandler):
+                        ctx.dest = await handler.execute(step, ctx)
                     else:
-                        if isinstance(handler, AsyncActionHandler):
-                            ctx.dest = await handler.execute(step, ctx)
-                        else:
-                            ctx.dest = handler.execute(step, ctx)
+                        ctx.dest = handler.execute(step, ctx)
                 except PipelineSignal as sig:
                     sig.handle(ctx)
                 except ControlFlowSignal:
@@ -1598,11 +1626,9 @@ class Engine:
             # Save real dest in metadata for JMESPath access
             # Preserve existing _real_dest if we're in a nested process_value call
             metadata_with_dest = {**ctx.metadata, '_real_dest': ctx.metadata.get('_real_dest', ctx.dest)}
-            value_ctx = ExecutionContext(
-                source=ctx.source,
-                dest=current,
-                engine=self,
-                metadata=metadata_with_dest,
+            value_ctx = ctx.copy(
+                new_dest=current,
+                new_metadata=metadata_with_dest,
             )
             try:
                 await self.value_pipeline.run_async([current], value_ctx)

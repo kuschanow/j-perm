@@ -23,6 +23,7 @@ from .render import (
     render_operand,
     render_operands,
     render_subquery,
+    resolve_value,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -74,7 +75,7 @@ def col(node, ctx, *, opts: RenderOptions) -> dict:
 
 
 def val(node, ctx, *, opts: RenderOptions) -> dict:
-    value = ctx.engine.process_value(node["$val"], ctx)
+    value = resolve_value(node["$val"], ctx)
     return fragment(PLACEHOLDER, [value])
 
 
@@ -219,7 +220,7 @@ def _in(node, ctx, *, opts: RenderOptions, negate: bool) -> dict:
     if is_query(right):
         sub = render_subquery(right, ctx)
         return fragment(f"{lf['sql']} {kw} {sub['sql']}", lf["params"] + sub["params"])
-    values = ctx.engine.process_value(right, ctx)
+    values = resolve_value(right, ctx)
     if not isinstance(values, (list, tuple)):
         values = [values]
     if not values:
@@ -529,7 +530,7 @@ def values(node, ctx, *, opts: RenderOptions) -> dict:
             raise ValueError("all $values rows must have the same length")
         rendered_rows.append("(" + ", ".join(PLACEHOLDER for _ in row) + ")")
         for cell in row:
-            params.append(ctx.engine.process_value(cell, ctx))
+            params.append(resolve_value(cell, ctx))
     return fragment("VALUES " + ", ".join(rendered_rows), params)
 
 
