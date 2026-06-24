@@ -134,8 +134,9 @@ class ExecutionContext:
     ) -> ExecutionContext:
         """Return a copy of this context with optional overrides.
 
-        Used by Engine.run_pipeline to create an isolated sub-context for the
-        nested pipeline.
+        Handy for preparing an isolated sub-context before calling
+        ``Engine.run_pipeline`` (e.g. ``ctx.copy(deepcopy_dest=True)`` so the
+        named pipeline cannot mutate the caller's document).
         """
         return ExecutionContext(
             source=new_source if new_source is not None else (copy.deepcopy(self.source) if deepcopy_source else self.source),
@@ -1200,8 +1201,8 @@ class Engine:
                            return deepcopy of result.
     * ``process_value``  – loop ``value_pipeline.run([val])`` until output ==
                            input or ``value_max_depth`` exceeded.
-    * ``run_pipeline``   – run a named pipeline with an *isolated* dest copy;
-                           original ctx is never mutated.
+    * ``run_pipeline``   – run a named pipeline over the *given* context as-is
+                           (no isolation); caller owns context preparation.
     """
 
     def __init__(
@@ -1414,36 +1415,37 @@ class Engine:
         await self.main_pipeline.run_async(spec, ctx)
         return copy.deepcopy(ctx.dest)
 
-    def run_pipeline(self, name: str, spec: Any, ctx: ExecutionContext) -> Any:
-        """Run a named pipeline with an isolated ``dest``.
+    def run_pipeline(self, name: str, spec: Any, ctx: ExecutionContext) -> ExecutionContext:
+        """Run a named pipeline over the given context, as-is.
 
-        *source* is taken from *ctx*; *dest* is deep-copied so the original
-        context is never mutated.  Returns a deep copy of the sub-context's
-        final ``dest``.
+        The pipeline runs over *ctx* directly — no sub-context is created and
+        nothing is deep-copied.  The caller owns all context preparation
+        (isolation, dest seeding, ``temp``/``metadata``).  After the run, the
+        result lives in ``ctx.dest``; the same (now mutated) *ctx* is returned
+        for ergonomic chaining and cyclic / fix-point drivers.
+
+        The parent's ``lang_exec_stack`` (if any) is already present in *ctx*,
+        so named-pipeline steps stay visible in the integrated trace.
 
         Typical call site (inside a handler)::
 
-            result = ctx.engine.run_pipeline("name", spec, ctx)
+            result = ctx.engine.run_pipeline("name", spec, ctx).dest
+
+        To isolate the caller's document, prepare an isolated context first::
+
+            sub = ctx.copy(deepcopy_dest=True)
+            ctx.engine.run_pipeline("name", spec, sub)
         """
         if name not in self._pipelines:
             raise KeyError(f"Pipeline {name!r} not registered")
         pipeline = self._pipelines[name]
         log_pl = logging.getLogger(f"j_perm.pipeline.{name}")
-        # Share the parent's lang_exec_stack so named-pipeline steps are
-        # visible in the integrated trace and error call stack.
-        parent_stack = ctx.metadata.get(_LANG_EXEC_STACK_KEY)
-        sub_meta: dict = {_LANG_EXEC_STACK_KEY: parent_stack} if parent_stack is not None else {}
-        sub_ctx = ExecutionContext(
-            source=ctx.source,
-            dest=copy.deepcopy(ctx.dest),
-            engine=self,
-            metadata=sub_meta,
-        )
         if log_pl.isEnabledFor(logging.DEBUG):
+            parent_stack = ctx.metadata.get(_LANG_EXEC_STACK_KEY)
             depth = len(parent_stack) if parent_stack is not None else 0
             log_pl.debug("%s→ [pipeline:%s]", "  " * depth, name)
         try:
-            pipeline.run(spec, sub_ctx)
+            pipeline.run(spec, ctx)
         except Exception as e:
             if not isinstance(e, (PipelineSignal, ControlFlowSignal)):
                 lang_stack = getattr(e, '_j_perm_lang_stack', None)
@@ -1455,32 +1457,29 @@ class Engine:
                         _format_lang_stack(lang_stack),
                     )
             raise
-        return copy.deepcopy(sub_ctx.dest)
+        return ctx
 
-    async def run_pipeline_async(self, name: str, spec: Any, ctx: ExecutionContext) -> Any:
+    async def run_pipeline_async(self, name: str, spec: Any, ctx: ExecutionContext) -> ExecutionContext:
         """Async version of run_pipeline().
+
+        Runs the named pipeline over the given *ctx* as-is (no isolation) and
+        returns that same, now-mutated context.  The caller owns context
+        preparation.
 
         Typical call site (inside an async handler)::
 
-            result = await ctx.engine.run_pipeline_async("name", spec, ctx)
+            result = (await ctx.engine.run_pipeline_async("name", spec, ctx)).dest
         """
         if name not in self._pipelines:
             raise KeyError(f"Pipeline {name!r} not registered")
         pipeline = self._pipelines[name]
         log_pl = logging.getLogger(f"j_perm.pipeline.{name}")
-        parent_stack = ctx.metadata.get(_LANG_EXEC_STACK_KEY)
-        sub_meta: dict = {_LANG_EXEC_STACK_KEY: parent_stack} if parent_stack is not None else {}
-        sub_ctx = ExecutionContext(
-            source=ctx.source,
-            dest=copy.deepcopy(ctx.dest),
-            engine=self,
-            metadata=sub_meta,
-        )
         if log_pl.isEnabledFor(logging.DEBUG):
+            parent_stack = ctx.metadata.get(_LANG_EXEC_STACK_KEY)
             depth = len(parent_stack) if parent_stack is not None else 0
             log_pl.debug("%s→ [pipeline:%s]", "  " * depth, name)
         try:
-            await pipeline.run_async(spec, sub_ctx)
+            await pipeline.run_async(spec, ctx)
         except Exception as e:
             if not isinstance(e, (PipelineSignal, ControlFlowSignal)):
                 lang_stack = getattr(e, '_j_perm_lang_stack', None)
@@ -1492,7 +1491,7 @@ class Engine:
                         _format_lang_stack(lang_stack),
                     )
             raise
-        return copy.deepcopy(sub_ctx.dest)
+        return ctx
 
     def process_value(self, value: Any, ctx: ExecutionContext, *, _unescape: bool = True) -> Any:
         """Run *value_pipeline* over *value* until it stabilises.

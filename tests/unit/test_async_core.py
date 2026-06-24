@@ -397,8 +397,8 @@ class TestEngineAsync:
         assert result is not ctx.dest
 
     @pytest.mark.asyncio
-    async def test_run_pipeline_async_with_isolated_dest(self):
-        """run_pipeline_async() uses isolated dest copy."""
+    async def test_run_pipeline_async_runs_over_given_context(self):
+        """run_pipeline_async() runs over the given context in-place."""
 
         class AsyncSetHandler(AsyncActionHandler):
             async def execute(self, step, ctx):
@@ -432,10 +432,9 @@ class TestEngineAsync:
 
         result = await engine.run_pipeline_async("named", {}, ctx)
 
-        # Named pipeline result includes new key
-        assert result == {"original": True, "from_pipeline": True}
-        # Original context dest unchanged
-        assert ctx.dest == {"original": True}
+        # Passthrough: the same context is returned, mutated in place.
+        assert result is ctx
+        assert ctx.dest == {"original": True, "from_pipeline": True}
 
     @pytest.mark.asyncio
     async def test_sync_and_async_handlers_in_same_pipeline(self):
@@ -813,7 +812,7 @@ class TestEngineAsyncExtended:
         try:
             ctx = ExecutionContext(source={}, dest={"initial": True}, engine=engine)
             result = await engine.run_pipeline_async("named", {}, ctx)
-            assert result.get("ok") is True
+            assert result.dest.get("ok") is True
         finally:
             log.setLevel(original_level)
 
