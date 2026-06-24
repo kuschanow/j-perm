@@ -7,11 +7,23 @@ from j_perm_sql.render import (
     is_fragment,
     is_query,
     join_fragments,
+    render,
     render_construct,
     render_operand,
     render_operands,
     render_subquery,
 )
+
+
+class TestActivePipeline:
+    def test_defaults_to_read_pipeline(self, ctx):
+        # ctx fixture registers only the "sql" pipeline; no metadata set
+        assert render({"$col": "id"}, ctx) == {"sql": '"id"', "params": []}
+
+    def test_respects_active_pipeline_metadata(self, ctx):
+        ctx.metadata["_sql_pipeline"] = "does_not_exist"
+        with pytest.raises(KeyError, match="not registered"):
+            render({"$col": "id"}, ctx)
 
 
 class TestFragment:

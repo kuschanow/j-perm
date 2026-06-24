@@ -19,8 +19,14 @@ from typing import Any
 
 from .dialect import PLACEHOLDER, RenderOptions
 
-#: Name the SQL value-pipeline is registered under on the engine.
+#: Name the read-only SQL value-pipeline is registered under on the engine.
 SQL_PIPELINE_NAME = "sql"
+
+#: Metadata key carrying the name of the pipeline that recursion should dispatch
+#: through.  Set by :class:`~j_perm_sql.handler.SqlRenderer` so a write
+#: statement's sub-parts resolve in the write pipeline; defaults to the read
+#: pipeline when absent.
+ACTIVE_PIPELINE_KEY = "_sql_pipeline"
 
 #: Keys whose presence marks a node as a *query* (must be parenthesised when
 #: used as an operand, subquery, or derived table).
@@ -45,8 +51,14 @@ def is_query(node: Any) -> bool:
 
 
 def render(node: Any, ctx) -> Any:
-    """Dispatch *node* through the isolated SQL pipeline and return the result."""
-    return ctx.engine.run_pipeline(SQL_PIPELINE_NAME, node, ctx).dest
+    """Dispatch *node* through the active SQL pipeline and return the result.
+
+    The active pipeline name is read from ``ctx.metadata`` (set by the renderer)
+    so recursion stays within the same pipeline the top-level operation chose;
+    it defaults to the read-only :data:`SQL_PIPELINE_NAME`.
+    """
+    name = ctx.metadata.get(ACTIVE_PIPELINE_KEY, SQL_PIPELINE_NAME)
+    return ctx.engine.run_pipeline(name, node, ctx).dest
 
 
 def render_construct(node: Any, ctx) -> dict:
