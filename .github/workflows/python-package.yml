@@ -28,3 +28,32 @@ jobs:
     - name: Test with pytest
       run: |
         pytest
+
+  plugins:
+
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Install core (from this repo) and test tools
+      run: |
+        python -m pip install --upgrade pip
+        pip install .
+        pip install pytest pytest-asyncio pytest-cov pytest-html
+    - name: Test each plugin against the in-repo core
+      run: |
+        for plugin in plugins/*/; do
+          if [ -d "${plugin}tests" ]; then
+            echo "::group::Testing ${plugin}"
+            (cd "${plugin}" && pytest)
+            echo "::endgroup::"
+          fi
+        done
