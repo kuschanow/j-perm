@@ -25,8 +25,10 @@ A [j-perm](https://github.com/kuschanow/j-perm) plugin that builds and executes
 pip install j-perm-sql
 ```
 
-Requires `j-perm >= 1.9.0` (the version that made `run_pipeline` a passthrough
-invoker, which this plugin relies on).
+Requires `j-perm >= 1.10.0`: 1.9.0 made `run_pipeline` a passthrough invoker
+(which this plugin relies on), and 1.10.0 added the `nested_spec_pipeline`
+compile hook and per-pipeline `CompiledSpec` execution that let `op: sql` be
+compiled end-to-end (see [Compilation](#compilation)).
 
 ## Quick start
 
@@ -187,6 +189,25 @@ async def run_sql(sql, params): ...
 install_sql(engine, run_sql)                  # async
 await engine.apply_async(spec, source=…, dest=…)
 ```
+
+## Compilation
+
+`op: sql` / `op: sql_write` are compilable. `engine.compile(spec)` compiles the
+`query` subtree against the isolated SQL pipeline (the engine never needs to
+understand the SQL constructs — it routes the nested spec through the registered
+pipeline by name), and the rendered tree is dispatched through the compiled path
+with per-node memoisation. Re-applying the same `CompiledSpec` keeps every node
+compiled; only `$val` data is re-bound from the live context on each run.
+
+```python
+compiled = engine.compile([{"op": "sql", "to": "/rows", "query": query}])
+compiled.apply(source={"wanted": 1}, dest={})    # renders + executes, fully compiled
+compiled.apply(source={"wanted": 2}, dest={})    # reuses compiled nodes, re-binds values
+```
+
+This requires the `nested_spec_pipeline` compile hook and per-pipeline
+`CompiledSpec` execution added in the core engine (see the "What gets compiled"
+section of the main j-perm README).
 
 ## Construct reference
 

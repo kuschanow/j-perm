@@ -28,6 +28,12 @@ SQL_PIPELINE_NAME = "sql"
 #: pipeline when absent.
 ACTIVE_PIPELINE_KEY = "_sql_pipeline"
 
+#: Metadata key carrying the per-node compilation cache (``{id(node): CompiledSpec}``)
+#: for the *compiled* render path.  Present only when the top-level ``op: sql``
+#: was reached through a compiled pipeline; absent for the plain interpreted path
+#: (then :func:`render` dispatches through ``run_pipeline`` as before).
+COMPILE_CACHE_KEY = "_sql_compile_cache"
+
 #: Keys whose presence marks a node as a *query* (must be parenthesised when
 #: used as an operand, subquery, or derived table).
 _QUERY_KEYS = frozenset(
@@ -56,9 +62,25 @@ def render(node: Any, ctx) -> Any:
     The active pipeline name is read from ``ctx.metadata`` (set by the renderer)
     so recursion stays within the same pipeline the top-level operation chose;
     it defaults to the read-only :data:`SQL_PIPELINE_NAME`.
+
+    When a compilation cache is active (the top-level ``op: sql`` was compiled),
+    each node is compiled once against the SQL pipeline and the resulting
+    :class:`~j_perm.core.CompiledSpec` is memoised on the cache, so subsequent
+    runs of the same compiled query skip stage processing and handler resolution
+    for every node.  The cache lives on the top-level compiled query spec, so it
+    is bounded by that query's nodes and freed together with it.
     """
     name = ctx.metadata.get(ACTIVE_PIPELINE_KEY, SQL_PIPELINE_NAME)
-    return ctx.engine.run_pipeline(name, node, ctx).dest
+    cache = ctx.metadata.get(COMPILE_CACHE_KEY)
+    if cache is None:
+        return ctx.engine.run_pipeline(name, node, ctx).dest
+    pipeline = ctx.engine.get_pipeline(name)
+    compiled = cache.get(id(node))
+    if compiled is None:
+        compiled = pipeline.compile(node, ctx)
+        cache[id(node)] = compiled
+    pipeline.run_compiled(compiled, ctx)
+    return ctx.dest
 
 
 def render_construct(node: Any, ctx) -> dict:

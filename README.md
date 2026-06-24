@@ -2414,6 +2414,7 @@ result_b = compiled.apply(source={"orders": [...]}, dest={"results": []})
 - **Stage processors** (`AssertShorthandProcessor`, `DeleteShorthandProcessor`, `AssignShorthandProcessor`) — run once; their output (normalized steps) is stored.
 - **Handler resolution** — `ActionTypeRegistry.resolve()` is called once per step; the handler list is cached in `CompiledStep.handlers`.
 - **Nested specs** — bodies of compound operations (`foreach.do`, `while.do`, `if.then/else`, `try.do/except/finally`, `$def.body`) are recursively compiled. When a compound handler executes, it calls `compiled_body.run(ctx)` instead of re-running stage processing.
+- **Isolated/named pipelines** — by default a nested spec is compiled against the same pipeline as its parent. A `Compound` handler may override `nested_spec_pipeline(step, key)` to return a registered pipeline name; the compiler then compiles that nested spec against `engine.get_pipeline(name)` instead. The resulting `CompiledSpec` remembers its owning pipeline, so `compiled.run(ctx)` dispatches through it — not the main pipeline. This lets a plugin with its own isolated pipeline (e.g. the `j-perm-sql` SQL pipeline) be compiled end-to-end without the core engine knowing anything about the plugin's constructs.
 
 ### CompiledSpec API
 
