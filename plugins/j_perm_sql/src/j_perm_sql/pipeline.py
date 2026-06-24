@@ -17,16 +17,23 @@ from j_perm import (
 )
 
 from .constructs import build_sql_specials
+from .constructs_write import build_sql_write_specials
 from .dialect import RenderOptions
 from .render import SQL_PIPELINE_NAME
 
-__all__ = ["build_sql_pipeline", "SQL_PIPELINE_NAME"]
+#: Name the write (DML) SQL pipeline is registered under on the engine.
+SQL_WRITE_PIPELINE_NAME = "sql_write"
+
+__all__ = [
+    "build_sql_pipeline",
+    "build_sql_write_pipeline",
+    "SQL_PIPELINE_NAME",
+    "SQL_WRITE_PIPELINE_NAME",
+]
 
 
-def build_sql_pipeline(opts: RenderOptions | None = None) -> Pipeline:
-    """Build the isolated SQL pipeline for the given dialect options."""
-    opts = opts if opts is not None else RenderOptions()
-    specials = build_sql_specials(opts)
+def _build_pipeline(specials: dict) -> Pipeline:
+    """Assemble an isolated SQL pipeline from a ``{key: handler}`` mapping."""
     registry = ActionTypeRegistry()
     registry.register(
         ActionNode(
@@ -45,3 +52,15 @@ def build_sql_pipeline(opts: RenderOptions | None = None) -> Pipeline:
         )
     )
     return Pipeline(registry=registry, track_execution=True)
+
+
+def build_sql_pipeline(opts: RenderOptions | None = None) -> Pipeline:
+    """Build the isolated read-only SQL pipeline for the given dialect options."""
+    opts = opts if opts is not None else RenderOptions()
+    return _build_pipeline(build_sql_specials(opts))
+
+
+def build_sql_write_pipeline(opts: RenderOptions | None = None) -> Pipeline:
+    """Build the isolated write (DML) SQL pipeline (read constructs + DML)."""
+    opts = opts if opts is not None else RenderOptions()
+    return _build_pipeline(build_sql_write_specials(opts))

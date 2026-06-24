@@ -25,22 +25,32 @@ Quick start::
     )
 """
 from .constructs import build_sql_specials
+from .constructs_write import build_sql_write_specials
 from .dialect import PLACEHOLDER, RenderOptions
 from .handler import AsyncSqlHandler, SqlHandler, SqlRenderer
-from .install import install_sql
-from .pipeline import SQL_PIPELINE_NAME, build_sql_pipeline
+from .install import install_sql, install_sql_write
+from .pipeline import (
+    SQL_PIPELINE_NAME,
+    SQL_WRITE_PIPELINE_NAME,
+    build_sql_pipeline,
+    build_sql_write_pipeline,
+)
 from .render import fragment, is_fragment, is_query, render
 
 __all__ = [
     "install_sql",
+    "install_sql_write",
     "RenderOptions",
     "PLACEHOLDER",
     "SqlHandler",
     "AsyncSqlHandler",
     "SqlRenderer",
     "build_sql_pipeline",
+    "build_sql_write_pipeline",
     "build_sql_specials",
+    "build_sql_write_specials",
     "SQL_PIPELINE_NAME",
+    "SQL_WRITE_PIPELINE_NAME",
     "fragment",
     "is_fragment",
     "is_query",

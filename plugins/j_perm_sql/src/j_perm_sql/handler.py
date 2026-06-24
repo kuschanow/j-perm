@@ -19,24 +19,35 @@ from __future__ import annotations
 from j_perm import ActionHandler, AsyncActionHandler
 
 from .dialect import RenderOptions
-from .render import SQL_PIPELINE_NAME, is_fragment
+from .render import ACTIVE_PIPELINE_KEY, SQL_PIPELINE_NAME, is_fragment
 
 
 class SqlRenderer:
-    """Render a SQL construct tree to ``(sql, params)`` for a target dialect."""
+    """Render a SQL construct tree to ``(sql, params)`` for a target dialect.
 
-    def __init__(self, opts: RenderOptions) -> None:
+    *pipeline_name* selects which isolated pipeline the tree (and all its
+    recursion) is dispatched through — the read-only ``"sql"`` pipeline by
+    default, or the write pipeline for ``op: sql_write``.
+    """
+
+    def __init__(self, opts: RenderOptions, pipeline_name: str = SQL_PIPELINE_NAME) -> None:
         self.opts = opts
+        self.pipeline_name = pipeline_name
 
     def render(self, query, ctx) -> tuple:
         # Render against a scratch dest so the real document is never clobbered,
         # but expose the real dest under _real_dest so @: pointers inside $val
-        # can still read the document being built.
+        # can still read the document being built.  The active pipeline name is
+        # threaded through metadata so recursion stays in this pipeline.
         render_ctx = ctx.copy(
             new_dest={},
-            new_metadata={**ctx.metadata, "_real_dest": ctx.dest},
+            new_metadata={
+                **ctx.metadata,
+                "_real_dest": ctx.dest,
+                ACTIVE_PIPELINE_KEY: self.pipeline_name,
+            },
         )
-        frag = ctx.engine.run_pipeline(SQL_PIPELINE_NAME, query, render_ctx).dest
+        frag = ctx.engine.run_pipeline(self.pipeline_name, query, render_ctx).dest
         if not is_fragment(frag):
             raise ValueError("top-level SQL query must be a SQL construct")
         return self.opts.finalize(frag["sql"], frag["params"])

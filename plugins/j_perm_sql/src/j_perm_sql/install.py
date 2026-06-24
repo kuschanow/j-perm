@@ -12,14 +12,29 @@ from j_perm import ActionNode, OpMatcher
 
 from .dialect import RenderOptions
 from .handler import AsyncSqlHandler, SqlHandler, SqlRenderer
-from .pipeline import build_sql_pipeline
-from .render import SQL_PIPELINE_NAME
+from .pipeline import (
+    SQL_PIPELINE_NAME,
+    SQL_WRITE_PIPELINE_NAME,
+    build_sql_pipeline,
+    build_sql_write_pipeline,
+)
 
-__all__ = ["install_sql"]
+__all__ = ["install_sql", "install_sql_write"]
+
+
+def _register_op(engine, executor, renderer, op):
+    """Register an ``op`` handler, choosing sync/async by the executor."""
+    if asyncio.iscoroutinefunction(executor):
+        handler = AsyncSqlHandler(executor, renderer)
+    else:
+        handler = SqlHandler(executor, renderer)
+    engine.main_pipeline.registry.register(
+        ActionNode(name=op, priority=10, matcher=OpMatcher(op), handler=handler)
+    )
 
 
 def install_sql(engine, executor, *, paramstyle: str = "qmark", dialect=None, op: str = "sql"):
-    """Install SQL support into *engine*.
+    """Install read-only SQL (``SELECT``) support into *engine*.
 
     Args:
         engine:    a built ``j_perm`` engine (e.g. from ``build_default_engine``).
@@ -36,12 +51,31 @@ def install_sql(engine, executor, *, paramstyle: str = "qmark", dialect=None, op
     """
     opts = dialect if dialect is not None else RenderOptions(paramstyle=paramstyle)
     engine.register_pipeline(SQL_PIPELINE_NAME, build_sql_pipeline(opts))
-    renderer = SqlRenderer(opts)
-    if asyncio.iscoroutinefunction(executor):
-        handler = AsyncSqlHandler(executor, renderer)
-    else:
-        handler = SqlHandler(executor, renderer)
-    engine.main_pipeline.registry.register(
-        ActionNode(name=op, priority=10, matcher=OpMatcher(op), handler=handler)
-    )
+    _register_op(engine, executor, SqlRenderer(opts, SQL_PIPELINE_NAME), op)
+    return engine
+
+
+def install_sql_write(
+    engine, executor, *, paramstyle: str = "qmark", dialect=None, op: str = "sql_write"
+):
+    """Install write (DML) SQL support — ``INSERT`` / ``UPDATE`` / ``DELETE``.
+
+    This is a separate, opt-in install: it registers an isolated write pipeline
+    (read constructs + DML) and a distinct ``op`` so that ``op: sql`` — if also
+    installed — stays guaranteed read-only.  Independent of :func:`install_sql`
+    (either may be installed alone, in any order).
+
+    Args:
+        engine:    a built ``j_perm`` engine.
+        executor:  ``executor(sql, params) -> result`` (sync or coroutine).
+        paramstyle: placeholder style when *dialect* is not given.
+        dialect:   an explicit :class:`RenderOptions`; overrides *paramstyle*.
+        op:        the operation name to register (default ``"sql_write"``).
+
+    Returns:
+        The same *engine*, for chaining.
+    """
+    opts = dialect if dialect is not None else RenderOptions(paramstyle=paramstyle)
+    engine.register_pipeline(SQL_WRITE_PIPELINE_NAME, build_sql_write_pipeline(opts))
+    _register_op(engine, executor, SqlRenderer(opts, SQL_WRITE_PIPELINE_NAME), op)
     return engine
