@@ -962,7 +962,8 @@ class TestEngineExtended:
 
         ctx = ExecutionContext(source={}, dest={}, engine=engine)
         result = engine.run_pipeline("named", {}, ctx)
-        assert result.get("from_named") is True
+        assert result is ctx
+        assert ctx.dest.get("from_named") is True
 
     def test_register_custom_function(self):
         """register_custom_function() sets function as engine attribute (line 910)."""
@@ -971,7 +972,7 @@ class TestEngineExtended:
         assert engine.double(7) == 14
 
     def test_run_pipeline_executes_named_pipeline(self):
-        """run_pipeline() runs named pipeline with isolated dest (lines 998-1028)."""
+        """run_pipeline() runs named pipeline over the given context in-place."""
 
         class SetHandler(ActionHandler):
             def execute(self, step, ctx):
@@ -992,8 +993,9 @@ class TestEngineExtended:
         ctx = ExecutionContext(source={}, dest={"original": True}, engine=engine)
         result = engine.run_pipeline("compute", {}, ctx)
 
-        assert result == {"original": True, "result": 42}
-        assert ctx.dest == {"original": True}  # original untouched
+        # Passthrough: the same context is returned, mutated in place.
+        assert result is ctx
+        assert ctx.dest == {"original": True, "result": 42}
 
     def test_run_pipeline_raises_for_unknown_pipeline(self):
         """run_pipeline() raises KeyError for unknown pipeline name."""
@@ -1123,7 +1125,7 @@ class TestEngineExtended:
         try:
             ctx = ExecutionContext(source={}, dest={}, engine=engine)
             result = engine.run_pipeline("dbg_pl", {}, ctx)
-            assert result.get("r") is True
+            assert result.dest.get("r") is True
         finally:
             log.setLevel(original_level)
 

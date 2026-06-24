@@ -463,6 +463,24 @@ logging.getLogger("j_perm").setLevel(logging.ERROR)  # suppress step trace
 
 Each line shows one stabilization pass: `input → output`. Multi-step resolution (e.g., `$ref` returning a template that itself gets substituted) appears as multiple lines, indented to the current call depth.
 
+### Invoking a Named Pipeline
+
+`engine.run_pipeline(name, spec, ctx)` runs a registered pipeline **over the given context, as-is** — no sub-context is created and nothing is deep-copied. The result lands in `ctx.dest`, and the same (now-mutated) context is returned for ergonomic chaining and cyclic/fix-point drivers:
+
+```python
+result = engine.run_pipeline("normalize", spec, ctx).dest
+```
+
+The caller owns all context preparation. To protect the caller's document from a named pipeline, prepare an isolated context first:
+
+```python
+sub = ctx.copy(deepcopy_dest=True)        # isolated copy of dest
+engine.run_pipeline("normalize", spec, sub)
+result = sub.dest
+```
+
+> **Migration note (behavior change):** previous versions auto-isolated the call — they ran the pipeline on a deep copy of `dest` and returned that copy's `dest`. `run_pipeline`/`run_pipeline_async` now pass the given context straight through and return the context (not the `dest` value). For the old behavior, pass `ctx.copy(deepcopy_dest=True)` and read `.dest` from the returned context.
+
 ### Named Pipeline Tracing
 
 Each named pipeline gets its own logger: **`j_perm.pipeline.<name>`**. This lets you turn on tracing for all pipelines at once or zoom in on a specific one.
