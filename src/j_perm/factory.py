@@ -249,6 +249,7 @@ def _make_engine(
         sub_max_number_result: float,
         trace_logging: bool,
         trace_repr_max: int | None,
+        text_syntax: bool,
         constructs_module: Any,
         special_handler_cls: Any,
         container_handler: Any,
@@ -296,7 +297,7 @@ def _make_engine(
         UnescapeRule(name="template", priority=0, unescape=template_unescape),
     ]
 
-    return Engine(
+    engine = Engine(
         resolver=resolver,
         processor=processor,
         main_pipeline=main_pipeline,
@@ -308,6 +309,13 @@ def _make_engine(
         trace_logging=trace_logging,
         trace_repr_max=trace_repr_max,
     )
+
+    if text_syntax:
+        # Register the text-syntax stage on the existing StageRegistry (no new API).
+        from .text import register_text_stage
+        register_text_stage(engine)
+
+    return engine
 
 
 def build_default_engine(
@@ -340,6 +348,8 @@ def build_default_engine(
         # Logging / tracing
         trace_logging: bool = False,
         trace_repr_max: int | None = 200,
+        # Text syntax
+        text_syntax: bool = True,
 ) -> Engine:
     """Assemble a synchronous Engine with the standard resolver and pipelines.
 
@@ -388,6 +398,7 @@ def build_default_engine(
         add_max_number_result=add_max_number_result, add_max_string_result=add_max_string_result,
         sub_max_number_result=sub_max_number_result,
         trace_logging=trace_logging, trace_repr_max=trace_repr_max,
+        text_syntax=text_syntax,
         constructs_module=_constructs,
         special_handler_cls=SpecialResolveHandler,
         container_handler=RecursiveDescentHandler(),
@@ -420,6 +431,7 @@ def build_default_async_engine(
         sub_max_number_result: float = 1e15,
         trace_logging: bool = False,
         trace_repr_max: int | None = 200,
+        text_syntax: bool = True,
 ) -> Engine:
     """Assemble the async twin of :func:`build_default_engine`.
 
@@ -477,6 +489,7 @@ def build_default_async_engine(
         add_max_number_result=add_max_number_result, add_max_string_result=add_max_string_result,
         sub_max_number_result=sub_max_number_result,
         trace_logging=trace_logging, trace_repr_max=trace_repr_max,
+        text_syntax=text_syntax,
         constructs_module=_constructs_async,
         special_handler_cls=AsyncSpecialResolveHandler,
         container_handler=AsyncRecursiveDescentHandler(),

@@ -33,7 +33,8 @@ def _register_op(engine, executor, renderer, op):
     )
 
 
-def install_sql(engine, executor, *, paramstyle: str = "qmark", dialect=None, op: str = "sql"):
+def install_sql(engine, executor, *, paramstyle: str = "qmark", dialect=None, op: str = "sql",
+                text_syntax: bool = True):
     """Install read-only SQL (``SELECT``) support into *engine*.
 
     Args:
@@ -45,6 +46,9 @@ def install_sql(engine, executor, *, paramstyle: str = "qmark", dialect=None, op
                     (``qmark`` | ``format`` | ``numeric`` | ``named``).
         dialect:   an explicit :class:`RenderOptions`; overrides *paramstyle*.
         op:        the operation name to register (default ``"sql"``).
+        text_syntax: when ``True`` (default), also register the ``sql{ … }``
+                   text-syntax stage so ``SELECT`` queries can be written as text
+                   in a spec.  Set ``False`` to register only the op handler.
 
     Returns:
         The same *engine*, for chaining.
@@ -52,11 +56,15 @@ def install_sql(engine, executor, *, paramstyle: str = "qmark", dialect=None, op
     opts = dialect if dialect is not None else RenderOptions(paramstyle=paramstyle)
     engine.register_pipeline(SQL_PIPELINE_NAME, build_sql_pipeline(opts))
     _register_op(engine, executor, SqlRenderer(opts, SQL_PIPELINE_NAME), op)
+    if text_syntax:
+        from .text import register_sql_text_stage
+        register_sql_text_stage(engine, tag="sql", op=op, read_only=True)
     return engine
 
 
 def install_sql_write(
-    engine, executor, *, paramstyle: str = "qmark", dialect=None, op: str = "sql_write"
+    engine, executor, *, paramstyle: str = "qmark", dialect=None, op: str = "sql_write",
+    text_syntax: bool = True,
 ):
     """Install write (DML) SQL support — ``INSERT`` / ``UPDATE`` / ``DELETE``.
 
@@ -78,4 +86,7 @@ def install_sql_write(
     opts = dialect if dialect is not None else RenderOptions(paramstyle=paramstyle)
     engine.register_pipeline(SQL_WRITE_PIPELINE_NAME, build_sql_write_pipeline(opts))
     _register_op(engine, executor, SqlRenderer(opts, SQL_WRITE_PIPELINE_NAME), op)
+    if text_syntax:
+        from .text import register_sql_text_stage
+        register_sql_text_stage(engine, tag="sql_write", op=op, read_only=False)
     return engine
