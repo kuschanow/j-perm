@@ -1,7 +1,12 @@
 """Engine factory — the single place where all pieces are assembled.
 
-``build_default_engine`` is the recommended entry point for users who want a
-fully functional Engine without hand-wiring every registry.
+``build_default_engine`` is the recommended entry point for a fully functional
+synchronous Engine.  ``build_default_async_engine`` is its async twin: an
+*equivalent* engine (same ops, same constructs, same limits) whose recursive
+handlers are async, so that an ``AsyncActionHandler`` (e.g. an async SQL handler
+or an async ``$func``) is awaited wherever it appears — as a step, inside a
+compound body, inside a ``$func`` body, or in value position.  Drive it through
+``engine.apply_async`` / ``engine.apply_compiled_async``.
 
 Customisation points:
 
@@ -22,27 +27,12 @@ from .core import (
     ActionTypeRegistry,
     Engine,
     Pipeline,
-    UnescapeRule
+    UnescapeRule,
 )
-from .handlers.constructs import (
-    ref_handler, eval_handler, and_handler, or_handler, not_handler,
-    make_cast_handler,
-    gt_handler, gte_handler, lt_handler, lte_handler, eq_handler, ne_handler,
-    div_handler, mod_handler, round_handler,
-    make_add_handler, make_sub_handler, make_mul_handler, make_pow_handler,
-    in_handler, exists_handler,
-    # String operations
-    make_str_split_handler, make_str_join_handler, str_slice_handler,
-    str_upper_handler, str_lower_handler,
-    str_strip_handler, str_lstrip_handler, str_rstrip_handler,
-    make_str_replace_handler, str_contains_handler,
-    str_startswith_handler, str_endswith_handler,
-    # Regex operations
-    make_regex_match_handler, make_regex_search_handler, make_regex_findall_handler,
-    make_regex_replace_handler, make_regex_groups_handler,
-    raw_handler,
-)
+from .handlers import constructs as _constructs
+from .handlers import constructs_async as _constructs_async
 from .handlers.container import ContainerMatcher, RecursiveDescentHandler
+from .handlers.container_async import AsyncRecursiveDescentHandler
 from .handlers.flow import (
     BreakMatcher, BreakHandler,
     ContinueMatcher, ContinueHandler,
@@ -51,6 +41,9 @@ from .handlers.function import (
     DefMatcher, CallMatcher, DefHandler, CallHandler,
     RaiseMatcher, RaiseHandler,
     ReturnMatcher, ReturnHandler,
+)
+from .handlers.function_async import (
+    AsyncDefHandler, AsyncCallHandler, AsyncRaiseHandler, AsyncReturnHandler,
 )
 from .handlers.identity import IdentityHandler
 from .handlers.ops import (
@@ -62,12 +55,267 @@ from .handlers.ops import (
     TryHandler,
     DeserializeHandler,
 )
+from .handlers.ops_async import (
+    AsyncSetHandler, AsyncCopyHandler, AsyncDeleteHandler,
+    AsyncForeachHandler, AsyncWhileHandler, AsyncIfHandler, AsyncExecHandler,
+    AsyncUpdateHandler, AsyncDistinctHandler, AsyncAssertHandler,
+    AsyncTryHandler, AsyncDeserializeHandler,
+)
 from .handlers.special import SpecialFn, SpecialMatcher, SpecialResolveHandler
+from .handlers.special_async import AsyncSpecialResolveHandler
 from .handlers.template import TemplMatcher, TemplSubstHandler, template_unescape
 from .matchers import AlwaysMatcher, OpMatcher
 from j_perm.processors.pointer_processor import PointerProcessor
 from .resolvers.pointer import PointerResolver
 from .stages.shorthands import build_default_shorthand_stages
+
+
+def _default_specials(
+        c: Any,
+        call_execute: Callable[..., Any],
+        resolved_casters: Mapping[str, Any],
+        *,
+        regex_timeout: float,
+        regex_allowed_flags: int | None,
+        pow_max_base: float,
+        pow_max_exponent: float,
+        mul_max_string_result: int,
+        mul_max_operand: float,
+        str_max_split_results: int,
+        str_max_join_result: int,
+        str_max_replace_result: int,
+        add_max_number_result: float,
+        add_max_string_result: int,
+        sub_max_number_result: float,
+) -> dict[str, SpecialFn]:
+    """Build the default ``$``-construct map from a constructs module *c*.
+
+    *c* is either :mod:`j_perm.handlers.constructs` (sync) or
+    :mod:`j_perm.handlers.constructs_async` (async) — both expose the same names,
+    so the same wiring produces a sync or async special-construct set.
+    *call_execute* is the (sync or async) ``$func`` callable.
+    """
+    return {
+        "$ref": c.ref_handler,
+        "$eval": c.eval_handler,
+        "$and": c.and_handler,
+        "$or": c.or_handler,
+        "$not": c.not_handler,
+        "$cast": c.make_cast_handler(resolved_casters),
+        "$gt": c.gt_handler,
+        "$gte": c.gte_handler,
+        "$lt": c.lt_handler,
+        "$lte": c.lte_handler,
+        "$eq": c.eq_handler,
+        "$ne": c.ne_handler,
+        "$in": c.in_handler,
+        "$exists": c.exists_handler,
+        "$add": c.make_add_handler(
+            max_number_result=add_max_number_result,
+            max_string_result=add_max_string_result,
+        ),
+        "$sub": c.make_sub_handler(
+            max_number_result=sub_max_number_result,
+        ),
+        "$mul": c.make_mul_handler(
+            max_string_result=mul_max_string_result,
+            max_operand=mul_max_operand,
+        ),
+        "$div": c.div_handler,
+        "$pow": c.make_pow_handler(
+            max_base=pow_max_base,
+            max_exponent=pow_max_exponent,
+        ),
+        "$mod": c.mod_handler,
+        "$round": c.round_handler,
+        # String operations
+        "$str_split": c.make_str_split_handler(max_results=str_max_split_results),
+        "$str_join": c.make_str_join_handler(max_result_length=str_max_join_result),
+        "$str_slice": c.str_slice_handler,
+        "$str_upper": c.str_upper_handler,
+        "$str_lower": c.str_lower_handler,
+        "$str_strip": c.str_strip_handler,
+        "$str_lstrip": c.str_lstrip_handler,
+        "$str_rstrip": c.str_rstrip_handler,
+        "$str_replace": c.make_str_replace_handler(max_result_length=str_max_replace_result),
+        "$str_contains": c.str_contains_handler,
+        "$str_startswith": c.str_startswith_handler,
+        "$str_endswith": c.str_endswith_handler,
+        # Regex operations
+        "$regex_match": c.make_regex_match_handler(
+            timeout=regex_timeout, allowed_flags=regex_allowed_flags),
+        "$regex_search": c.make_regex_search_handler(
+            timeout=regex_timeout, allowed_flags=regex_allowed_flags),
+        "$regex_findall": c.make_regex_findall_handler(
+            timeout=regex_timeout, allowed_flags=regex_allowed_flags),
+        "$regex_replace": c.make_regex_replace_handler(
+            timeout=regex_timeout, allowed_flags=regex_allowed_flags),
+        "$regex_groups": c.make_regex_groups_handler(
+            timeout=regex_timeout, allowed_flags=regex_allowed_flags),
+        # $func before $raw so {"$func": ..., "$raw": True} dispatches to $func.
+        "$func": call_execute,
+        "$raw": c.raw_handler,
+    }
+
+
+def _build_value_pipeline(
+        *,
+        specials: Mapping[str, SpecialFn],
+        special_handler: Any,
+        container_handler: Any,
+        casters: Mapping[str, Callable[[Any], Any]] | None,
+        jmes_options: jmespath.Options | None,
+) -> Pipeline:
+    """Assemble the value pipeline from the given (sync or async) handlers."""
+    special_keys: set[str] = set(specials.keys())
+    value_reg = ActionTypeRegistry()
+
+    if specials:
+        value_reg.register(ActionNode(
+            name="special", priority=10,
+            matcher=SpecialMatcher(special_keys),
+            handler=special_handler,
+        ))
+
+    value_reg.register(ActionNode(
+        name="template", priority=8,
+        matcher=TemplMatcher(),
+        handler=TemplSubstHandler(casters=casters, jmes_options=jmes_options),
+    ))
+    value_reg.register(ActionNode(
+        name="container", priority=5,
+        matcher=ContainerMatcher(special_keys),
+        handler=container_handler,
+    ))
+    value_reg.register(ActionNode(
+        name="identity", priority=-999,
+        matcher=AlwaysMatcher(),
+        handler=IdentityHandler(),
+    ))
+
+    return Pipeline(registry=value_reg)
+
+
+def _register_main_ops(main_reg: ActionTypeRegistry, ops: Mapping[str, Any]) -> None:
+    """Register all built-in operation nodes from a bundle of handler instances.
+
+    The *ops* bundle maps each op name to its handler; ``break`` / ``continue``
+    are always the (stateless) sync handlers.  Both the sync and async builders
+    call this with their respective bundles so the two engines stay equivalent.
+    """
+    nodes: list[tuple[str, Any, Any]] = [
+        ("set", OpMatcher("set"), ops["set"]),
+        ("copy", OpMatcher("copy"), ops["copy"]),
+        ("delete", OpMatcher("delete"), ops["delete"]),
+        ("foreach", OpMatcher("foreach"), ops["foreach"]),
+        ("while", OpMatcher("while"), ops["while"]),
+        ("if", OpMatcher("if"), ops["if"]),
+        ("exec", OpMatcher("exec"), ops["exec"]),
+        ("update", OpMatcher("update"), ops["update"]),
+        ("distinct", OpMatcher("distinct"), ops["distinct"]),
+        ("assert", OpMatcher("assert"), ops["assert"]),
+        ("try", OpMatcher("try"), ops["try"]),
+        ("deserialize", OpMatcher("deserialize"), ops["deserialize"]),
+        ("def", DefMatcher(), ops["def"]),
+        ("func", CallMatcher(), ops["func"]),
+        ("raise", RaiseMatcher(), ops["raise"]),
+        ("return", ReturnMatcher(), ops["return"]),
+        ("break", BreakMatcher(), BreakHandler()),
+        ("continue", ContinueMatcher(), ContinueHandler()),
+    ]
+    for name, matcher, handler in nodes:
+        main_reg.register(ActionNode(name=name, priority=10, matcher=matcher, handler=handler))
+
+
+def _make_engine(
+        *,
+        specials: Mapping[str, SpecialFn] | None,
+        casters: Mapping[str, Callable[[Any], Any]] | None,
+        jmes_options: jmespath.Options | None,
+        value_max_depth: int,
+        regex_timeout: float,
+        regex_allowed_flags: int | None,
+        pow_max_base: float,
+        pow_max_exponent: float,
+        mul_max_string_result: int,
+        mul_max_operand: float,
+        str_max_split_results: int,
+        str_max_join_result: int,
+        str_max_replace_result: int,
+        max_operations: int,
+        max_function_recursion_depth: int,
+        add_max_number_result: float,
+        add_max_string_result: int,
+        sub_max_number_result: float,
+        trace_logging: bool,
+        trace_repr_max: int | None,
+        text_syntax: bool,
+        constructs_module: Any,
+        special_handler_cls: Any,
+        container_handler: Any,
+        call_handler: Any,
+        ops: Mapping[str, Any],
+) -> Engine:
+    """Shared assembly for the sync and async engine builders."""
+    resolver = PointerResolver()
+    processor = PointerProcessor()
+
+    if specials is None:
+        resolved_casters = casters if casters is not None else BUILTIN_CASTERS
+        specials = _default_specials(
+            constructs_module,
+            call_handler.execute,
+            resolved_casters,
+            regex_timeout=regex_timeout,
+            regex_allowed_flags=regex_allowed_flags,
+            pow_max_base=pow_max_base,
+            pow_max_exponent=pow_max_exponent,
+            mul_max_string_result=mul_max_string_result,
+            mul_max_operand=mul_max_operand,
+            str_max_split_results=str_max_split_results,
+            str_max_join_result=str_max_join_result,
+            str_max_replace_result=str_max_replace_result,
+            add_max_number_result=add_max_number_result,
+            add_max_string_result=add_max_string_result,
+            sub_max_number_result=sub_max_number_result,
+        )
+
+    value_pipeline = _build_value_pipeline(
+        specials=specials,
+        special_handler=special_handler_cls(specials),
+        container_handler=container_handler,
+        casters=casters,
+        jmes_options=jmes_options,
+    )
+
+    main_stages = build_default_shorthand_stages()
+    main_reg = ActionTypeRegistry()
+    _register_main_ops(main_reg, ops)
+    main_pipeline = Pipeline(stages=main_stages, registry=main_reg, track_execution=True)
+
+    unescape_rules = [
+        UnescapeRule(name="template", priority=0, unescape=template_unescape),
+    ]
+
+    engine = Engine(
+        resolver=resolver,
+        processor=processor,
+        main_pipeline=main_pipeline,
+        value_pipeline=value_pipeline,
+        value_max_depth=value_max_depth,
+        unescape_rules=unescape_rules,
+        max_operations=max_operations,
+        max_function_recursion_depth=max_function_recursion_depth,
+        trace_logging=trace_logging,
+        trace_repr_max=trace_repr_max,
+    )
+
+    if text_syntax:
+        # Register the text-syntax stage on the existing StageRegistry (no new API).
+        from .text import register_text_stage
+        register_text_stage(engine)
+
+    return engine
 
 
 def build_default_engine(
@@ -100,67 +348,13 @@ def build_default_engine(
         # Logging / tracing
         trace_logging: bool = False,
         trace_repr_max: int | None = 200,
+        # Text syntax
+        text_syntax: bool = True,
 ) -> Engine:
-    """Assemble an Engine with the standard resolver and pipelines.
+    """Assemble a synchronous Engine with the standard resolver and pipelines.
 
-    What gets wired
-    ---------------
-    resolver
-        ``PointerResolver`` — self-contained JSON Pointer implementation.
-
-    main_pipeline
-        * Stages:
-            - ``AssertShorthandProcessor``  (priority 100) — ``~assert``
-            - ``DeleteShorthandProcessor``  (priority  50) — ``~delete``
-            - ``AssignShorthandProcessor``  (priority   0) — fallback ``/path``
-        * Registry: all 13 built-in ops (set, copy, delete, foreach, while, if, exec, update, distinct, assert, try, def, func).
-
-    value_pipeline
-        * ``SpecialResolveHandler``   (priority 10)  – ``$ref``, ``$eval``, ``$cast``,
-          ``$and``, ``$or``, ``$not``, ``$gt``, ``$gte``, ``$lt``, ``$lte``, ``$eq``, ``$ne``,
-          ``$in``, ``$exists``, ``$add``, ``$sub``, ``$mul``, ``$div``, ``$pow``, ``$mod``.
-        * ``TemplSubstHandler``       (priority  8)  – ``${…}`` with built-in
-          casters (int, float, bool, str), JMESPath function (subtract), and
-          dest pointer (@:/path).
-        * ``RecursiveDescentHandler`` (priority  5)  – recurse into containers.
-        * ``IdentityHandler``         (priority -999, catch-all).
-
-    unescape_rules
-        * ``template_unescape``       (priority  0)  – strips ``$${`` → ``${``
-          and ``$$`` → ``$``.
-
-    Args:
-        specials:                Custom special-construct handlers.  ``None`` → uses
-                                 defaults (``$ref``, ``$eval``, ``$cast``, ``$and``, ``$or``, ``$not``, ``$gt``, ``$gte``, ``$lt``, ``$lte``, ``$eq``, ``$ne``).
-        casters:                 Custom template casters (used in both ``${type:...}`` and ``$cast``).  ``None`` → uses built-in (int, float, bool, str).
-        jmes_options:            Custom JMESPath options for template handler.  ``None`` → uses built-in with subtract function.
-        value_max_depth:         Stabilisation-loop iteration cap.
-        regex_timeout:           Timeout in seconds for regex operations (default: 2.0).
-        regex_allowed_flags:     Bitmask of allowed regex flags. ``None`` → default safe flags
-                                 (IGNORECASE, MULTILINE, DOTALL, VERBOSE, ASCII).
-                                 Use -1 to allow all flags (not recommended for untrusted input).
-        pow_max_base:            Maximum base value for ``$pow`` (default: 1e6).
-        pow_max_exponent:        Maximum exponent value for ``$pow`` (default: 1000).
-        mul_max_string_result:   Maximum length of string result in ``$mul`` (default: 1_000_000).
-        mul_max_operand:         Maximum numeric operand value in ``$mul`` (default: 1e9).
-        max_loop_iterations:     Maximum iterations for ``while`` loops (default: 10_000).
-        max_foreach_items:       Maximum items to process in ``foreach`` (default: 100_000).
-        str_max_split_results:   Maximum number of results from ``$str_split`` (default: 100_000).
-        str_max_join_result:     Maximum length of result from ``$str_join`` (default: 10_000_000).
-        str_max_replace_result:  Maximum length of result from ``$str_replace`` (default: 10_000_000).
-        max_operations:          Maximum total operations allowed (default: 1_000_000).
-        max_function_recursion_depth: Maximum function call depth (default: 100).
-        add_max_number_result:   Maximum numeric result from ``$add`` (default: 1e15).
-        add_max_string_result:   Maximum string length result from ``$add`` (default: 100_000_000).
-        sub_max_number_result:   Maximum numeric result from ``$sub`` (default: 1e15).
-        trace_logging:           If ``True``, emit a ``DEBUG`` log line (via the ``j_perm``
-                                 logger) for every step executed in the main pipeline.
-                                 Useful for tracing execution flow without errors.
-        trace_repr_max:          Maximum characters per step in the language call stack
-                                 and trace output.  ``None`` disables truncation.
-
-    Returns:
-        Fully wired ``Engine`` ready for use.
+    See the module docstring for the async twin.  All keyword arguments are
+    shared verbatim by :func:`build_default_async_engine`.
 
     Example::
 
@@ -172,244 +366,133 @@ def build_default_engine(
         )
         # → {"name": "Alice", "age": "30"}
     """
-    resolver = PointerResolver()
-    processor = PointerProcessor()
-
-    # -- default specials ---------------------------------------------------
-    if specials is None:
-        # Resolve casters for $cast handler
-        resolved_casters = casters if casters is not None else BUILTIN_CASTERS
-        specials = {
-            "$ref": ref_handler,
-            "$eval": eval_handler,
-            "$and": and_handler,
-            "$or": or_handler,
-            "$not": not_handler,
-            "$cast": make_cast_handler(resolved_casters),
-            "$gt": gt_handler,
-            "$gte": gte_handler,
-            "$lt": lt_handler,
-            "$lte": lte_handler,
-            "$eq": eq_handler,
-            "$ne": ne_handler,
-            "$in": in_handler,
-            "$exists": exists_handler,
-            "$add": make_add_handler(
-                max_number_result=add_max_number_result,
-                max_string_result=add_max_string_result,
-            ),
-            "$sub": make_sub_handler(
-                max_number_result=sub_max_number_result,
-            ),
-            "$mul": make_mul_handler(
-                max_string_result=mul_max_string_result,
-                max_operand=mul_max_operand,
-            ),
-            "$div": div_handler,
-            "$pow": make_pow_handler(
-                max_base=pow_max_base,
-                max_exponent=pow_max_exponent,
-            ),
-            "$mod": mod_handler,
-            "$round": round_handler,
-            # String operations
-            "$str_split": make_str_split_handler(
-                max_results=str_max_split_results,
-            ),
-            "$str_join": make_str_join_handler(
-                max_result_length=str_max_join_result,
-            ),
-            "$str_slice": str_slice_handler,
-            "$str_upper": str_upper_handler,
-            "$str_lower": str_lower_handler,
-            "$str_strip": str_strip_handler,
-            "$str_lstrip": str_lstrip_handler,
-            "$str_rstrip": str_rstrip_handler,
-            "$str_replace": make_str_replace_handler(
-                max_result_length=str_max_replace_result,
-            ),
-            "$str_contains": str_contains_handler,
-            "$str_startswith": str_startswith_handler,
-            "$str_endswith": str_endswith_handler,
-            # Regex operations
-            "$regex_match": make_regex_match_handler(
-                timeout=regex_timeout,
-                allowed_flags=regex_allowed_flags,
-            ),
-            "$regex_search": make_regex_search_handler(
-                timeout=regex_timeout,
-                allowed_flags=regex_allowed_flags,
-            ),
-            "$regex_findall": make_regex_findall_handler(
-                timeout=regex_timeout,
-                allowed_flags=regex_allowed_flags,
-            ),
-            "$regex_replace": make_regex_replace_handler(
-                timeout=regex_timeout,
-                allowed_flags=regex_allowed_flags,
-            ),
-            "$regex_groups": make_regex_groups_handler(
-                timeout=regex_timeout,
-                allowed_flags=regex_allowed_flags,
-            ),
-            # $func is registered here (not as a separate node) so that
-            # SpecialResolveHandler handles it — giving $raw: True flag support.
-            # It must come before $raw so {"$func": ..., "$raw": True} dispatches
-            # to $func first.
-            "$func": CallHandler().execute,
-            # $raw must be last so that {"$ref": ..., "$raw": True} dispatches
-            # to its primary construct first; the flag is then caught by
-            # SpecialResolveHandler after the primary handler returns.
-            "$raw": raw_handler,
-        }
-
-    # -- value pipeline -----------------------------------------------------
-    special_keys: set[str] = set(specials.keys())
-    value_reg = ActionTypeRegistry()
-
-    if specials:
-        value_reg.register(ActionNode(
-            name="special", priority=10,
-            matcher=SpecialMatcher(special_keys),
-            handler=SpecialResolveHandler(specials),
-        ))
-
-    value_reg.register(ActionNode(
-        name="template", priority=8,
-        matcher=TemplMatcher(),
-        handler=TemplSubstHandler(casters=casters, jmes_options=jmes_options),
-    ))
-    value_reg.register(ActionNode(
-        name="container", priority=5,
-        matcher=ContainerMatcher(special_keys),
-        handler=RecursiveDescentHandler(),
-    ))
-    value_reg.register(ActionNode(
-        name="identity", priority=-999,
-        matcher=AlwaysMatcher(),
-        handler=IdentityHandler(),
-    ))
-
-    value_pipeline = Pipeline(registry=value_reg)
-
-    # -- main pipeline ------------------------------------------------------
-    # Stages (shorthand expansion via StageNodes)
-    main_stages = build_default_shorthand_stages()
-
-    # Registry (all ops)
-    main_reg = ActionTypeRegistry()
-
-    # Instantiate shared SetHandler for copy/copyD reuse
     set_handler = SetHandler()
-
-    main_reg.register(ActionNode(
-        name="set", priority=10,
-        matcher=OpMatcher("set"),
-        handler=set_handler,
-    ))
-    main_reg.register(ActionNode(
-        name="copy", priority=10,
-        matcher=OpMatcher("copy"),
-        handler=CopyHandler(set_handler),
-    ))
-    main_reg.register(ActionNode(
-        name="delete", priority=10,
-        matcher=OpMatcher("delete"),
-        handler=DeleteHandler(),
-    ))
-    main_reg.register(ActionNode(
-        name="foreach", priority=10,
-        matcher=OpMatcher("foreach"),
-        handler=ForeachHandler(max_items=max_foreach_items),
-    ))
-    main_reg.register(ActionNode(
-        name="while", priority=10,
-        matcher=OpMatcher("while"),
-        handler=WhileHandler(max_iterations=max_loop_iterations),
-    ))
-    main_reg.register(ActionNode(
-        name="if", priority=10,
-        matcher=OpMatcher("if"),
-        handler=IfHandler(),
-    ))
-    main_reg.register(ActionNode(
-        name="exec", priority=10,
-        matcher=OpMatcher("exec"),
-        handler=ExecHandler(),
-    ))
-    main_reg.register(ActionNode(
-        name="update", priority=10,
-        matcher=OpMatcher("update"),
-        handler=UpdateHandler(),
-    ))
-    main_reg.register(ActionNode(
-        name="distinct", priority=10,
-        matcher=OpMatcher("distinct"),
-        handler=DistinctHandler(),
-    ))
-    main_reg.register(ActionNode(
-        name="assert", priority=10,
-        matcher=OpMatcher("assert"),
-        handler=AssertHandler(),
-    ))
-    main_reg.register(ActionNode(
-        name="try", priority=10,
-        matcher=OpMatcher("try"),
-        handler=TryHandler(),
-    ))
-    main_reg.register(ActionNode(
-        name="deserialize", priority=10,
-        matcher=OpMatcher("deserialize"),
-        handler=DeserializeHandler(set_handler=set_handler),
-    ))
-    main_reg.register(ActionNode(
-        name="def", priority=10,
-        matcher=DefMatcher(),
-        handler=DefHandler(),
-    ))
-    main_reg.register(ActionNode(
-        name="func", priority=10,
-        matcher=CallMatcher(),
-        handler=CallHandler(),
-    ))
-    main_reg.register(ActionNode(
-        name="raise", priority=10,
-        matcher=RaiseMatcher(),
-        handler=RaiseHandler(),
-    ))
-    main_reg.register(ActionNode(
-        name="return", priority=10,
-        matcher=ReturnMatcher(),
-        handler=ReturnHandler(),
-    ))
-    main_reg.register(ActionNode(
-        name="break", priority=10,
-        matcher=BreakMatcher(),
-        handler=BreakHandler(),
-    ))
-    main_reg.register(ActionNode(
-        name="continue", priority=10,
-        matcher=ContinueMatcher(),
-        handler=ContinueHandler(),
-    ))
-
-    main_pipeline = Pipeline(stages=main_stages, registry=main_reg, track_execution=True)
-
-    # -- unescape rules -----------------------------------------------------
-    unescape_rules = [
-        UnescapeRule(name="template", priority=0, unescape=template_unescape),
-    ]
-
-    # -- engine -------------------------------------------------------------
-    return Engine(
-        resolver=resolver,
-        processor=processor,
-        main_pipeline=main_pipeline,
-        value_pipeline=value_pipeline,
+    ops = {
+        "set": set_handler,
+        "copy": CopyHandler(set_handler),
+        "delete": DeleteHandler(),
+        "foreach": ForeachHandler(max_items=max_foreach_items),
+        "while": WhileHandler(max_iterations=max_loop_iterations),
+        "if": IfHandler(),
+        "exec": ExecHandler(),
+        "update": UpdateHandler(),
+        "distinct": DistinctHandler(),
+        "assert": AssertHandler(),
+        "try": TryHandler(),
+        "deserialize": DeserializeHandler(set_handler=set_handler),
+        "def": DefHandler(),
+        "func": CallHandler(),
+        "raise": RaiseHandler(),
+        "return": ReturnHandler(),
+    }
+    return _make_engine(
+        specials=specials, casters=casters, jmes_options=jmes_options,
         value_max_depth=value_max_depth,
-        unescape_rules=unescape_rules,
+        regex_timeout=regex_timeout, regex_allowed_flags=regex_allowed_flags,
+        pow_max_base=pow_max_base, pow_max_exponent=pow_max_exponent,
+        mul_max_string_result=mul_max_string_result, mul_max_operand=mul_max_operand,
+        str_max_split_results=str_max_split_results, str_max_join_result=str_max_join_result,
+        str_max_replace_result=str_max_replace_result,
         max_operations=max_operations,
         max_function_recursion_depth=max_function_recursion_depth,
-        trace_logging=trace_logging,
-        trace_repr_max=trace_repr_max,
+        add_max_number_result=add_max_number_result, add_max_string_result=add_max_string_result,
+        sub_max_number_result=sub_max_number_result,
+        trace_logging=trace_logging, trace_repr_max=trace_repr_max,
+        text_syntax=text_syntax,
+        constructs_module=_constructs,
+        special_handler_cls=SpecialResolveHandler,
+        container_handler=RecursiveDescentHandler(),
+        call_handler=CallHandler(),
+        ops=ops,
+    )
+
+
+def build_default_async_engine(
+        *,
+        specials: Mapping[str, SpecialFn] | None = None,
+        casters: Mapping[str, Callable[[Any], Any]] | None = None,
+        jmes_options: jmespath.Options | None = None,
+        value_max_depth: int = 50,
+        regex_timeout: float = 2.0,
+        regex_allowed_flags: int | None = None,
+        pow_max_base: float = 1e6,
+        pow_max_exponent: float = 1000,
+        mul_max_string_result: int = 1_000_000,
+        mul_max_operand: float = 1e9,
+        max_loop_iterations: int = 10_000,
+        max_foreach_items: int = 100_000,
+        str_max_split_results: int = 100_000,
+        str_max_join_result: int = 10_000_000,
+        str_max_replace_result: int = 10_000_000,
+        max_operations: int = 1_000_000,
+        max_function_recursion_depth: int = 100,
+        add_max_number_result: float = 1e15,
+        add_max_string_result: int = 100_000_000,
+        sub_max_number_result: float = 1e15,
+        trace_logging: bool = False,
+        trace_repr_max: int | None = 200,
+        text_syntax: bool = True,
+) -> Engine:
+    """Assemble the async twin of :func:`build_default_engine`.
+
+    Identical wiring — same ops, constructs, casters and limits — but every
+    recursive handler (compound ops, ``$func``/``$def``, the value-pipeline
+    special/container dispatch and every ``$``-construct) is async, so an
+    ``AsyncActionHandler`` is awaited wherever it is reached.  Stateless
+    handlers (``$break`` / ``$continue`` / identity / template) stay sync; they
+    run unchanged on the async path.
+
+    Drive the resulting engine through the async entry points
+    (``apply_async`` / ``apply_to_context_async`` / ``apply_compiled_async`` /
+    ``run_pipeline_async``).
+
+    Example::
+
+        engine = build_default_async_engine()
+        result = await engine.apply_async(
+            spec={"op": "foreach", "in": "/items", "as": "it",
+                  "parallel": True,
+                  "do": [{"op": "set", "path": "/out/-",
+                          "value": {"$func": "fetch", "args": ["&:/it"]}}]},
+            source={"items": [1, 2, 3]}, dest={},
+        )
+    """
+    set_handler = AsyncSetHandler()
+    ops = {
+        "set": set_handler,
+        "copy": AsyncCopyHandler(set_handler),
+        "delete": AsyncDeleteHandler(),
+        "foreach": AsyncForeachHandler(max_items=max_foreach_items),
+        "while": AsyncWhileHandler(max_iterations=max_loop_iterations),
+        "if": AsyncIfHandler(),
+        "exec": AsyncExecHandler(),
+        "update": AsyncUpdateHandler(),
+        "distinct": AsyncDistinctHandler(),
+        "assert": AsyncAssertHandler(),
+        "try": AsyncTryHandler(),
+        "deserialize": AsyncDeserializeHandler(set_handler=set_handler),
+        "def": AsyncDefHandler(),
+        "func": AsyncCallHandler(),
+        "raise": AsyncRaiseHandler(),
+        "return": AsyncReturnHandler(),
+    }
+    return _make_engine(
+        specials=specials, casters=casters, jmes_options=jmes_options,
+        value_max_depth=value_max_depth,
+        regex_timeout=regex_timeout, regex_allowed_flags=regex_allowed_flags,
+        pow_max_base=pow_max_base, pow_max_exponent=pow_max_exponent,
+        mul_max_string_result=mul_max_string_result, mul_max_operand=mul_max_operand,
+        str_max_split_results=str_max_split_results, str_max_join_result=str_max_join_result,
+        str_max_replace_result=str_max_replace_result,
+        max_operations=max_operations,
+        max_function_recursion_depth=max_function_recursion_depth,
+        add_max_number_result=add_max_number_result, add_max_string_result=add_max_string_result,
+        sub_max_number_result=sub_max_number_result,
+        trace_logging=trace_logging, trace_repr_max=trace_repr_max,
+        text_syntax=text_syntax,
+        constructs_module=_constructs_async,
+        special_handler_cls=AsyncSpecialResolveHandler,
+        container_handler=AsyncRecursiveDescentHandler(),
+        call_handler=AsyncCallHandler(),
+        ops=ops,
     )

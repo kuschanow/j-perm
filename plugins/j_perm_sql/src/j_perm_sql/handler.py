@@ -22,8 +22,10 @@ from j_perm.core import Compound
 from .dialect import RenderOptions
 from .render import (
     ACTIVE_PIPELINE_KEY,
+    ASYNC_VALUE_CACHE_KEY,
     COMPILE_CACHE_KEY,
     SQL_PIPELINE_NAME,
+    _NeedAsyncValue,
     is_fragment,
 )
 
@@ -86,6 +88,43 @@ class SqlRenderer:
         ctx.engine.get_pipeline(self.pipeline_name).run_compiled(compiled_query, render_ctx)
         return self._finalize(render_ctx.dest)
 
+    async def render_async(self, query, ctx) -> tuple:
+        """Async twin of :meth:`render`.
+
+        Renders synchronously, but each embedded engine value (``$val`` etc.) is
+        resolved via ``process_value_async``: an unresolved value raises
+        :class:`~j_perm_sql.render._NeedAsyncValue`, we ``await`` it, cache it by
+        ``id(node)``, and restart the render.  After *k* distinct value nodes the
+        render runs ``k+1`` times (cheap — pure string building over a scratch
+        dest), and never resolves values through the (async) value pipeline
+        synchronously.
+        """
+        cache: dict = {}
+        while True:
+            render_ctx = self._render_ctx(ctx, {ASYNC_VALUE_CACHE_KEY: cache})
+            try:
+                frag = ctx.engine.run_pipeline(self.pipeline_name, query, render_ctx).dest
+                return self._finalize(frag)
+            except _NeedAsyncValue as exc:
+                cache[id(exc.node)] = await ctx.engine.process_value_async(exc.node, render_ctx)
+
+    async def render_compiled_async(self, compiled_query, ctx) -> tuple:
+        """Async twin of :meth:`render_compiled` (same restart protocol)."""
+        node_cache = getattr(compiled_query, _NODE_CACHE_ATTR, None)
+        if node_cache is None:
+            node_cache = {}
+            setattr(compiled_query, _NODE_CACHE_ATTR, node_cache)
+        value_cache: dict = {}
+        pipeline = ctx.engine.get_pipeline(self.pipeline_name)
+        while True:
+            render_ctx = self._render_ctx(
+                ctx, {COMPILE_CACHE_KEY: node_cache, ASYNC_VALUE_CACHE_KEY: value_cache})
+            try:
+                pipeline.run_compiled(compiled_query, render_ctx)
+                return self._finalize(render_ctx.dest)
+            except _NeedAsyncValue as exc:
+                value_cache[id(exc.node)] = await ctx.engine.process_value_async(exc.node, render_ctx)
+
 
 class _SqlCompound(Compound):
     """Mixin marking the ``op: sql`` handlers as compilable.
@@ -107,6 +146,13 @@ class _SqlCompound(Compound):
 def _write_result(step, ctx, result):
     if "to" in step:
         path = ctx.engine.process_value(step["to"], ctx)
+        ctx.engine.processor.set(path, ctx, result)
+    return ctx.dest
+
+
+async def _write_result_async(step, ctx, result):
+    if "to" in step:
+        path = await ctx.engine.process_value_async(step["to"], ctx)
         ctx.engine.processor.set(path, ctx, result)
     return ctx.dest
 
@@ -137,11 +183,11 @@ class AsyncSqlHandler(AsyncActionHandler, _SqlCompound):
         self._renderer = renderer
 
     async def execute(self, step, ctx):
-        sql, params = self._renderer.render(step["query"], ctx)
+        sql, params = await self._renderer.render_async(step["query"], ctx)
         result = await self._executor(sql, params)
-        return _write_result(step, ctx, result)
+        return await _write_result_async(step, ctx, result)
 
     async def execute_compiled(self, step, ctx, nested):
-        sql, params = self._renderer.render_compiled(nested["query"], ctx)
+        sql, params = await self._renderer.render_compiled_async(nested["query"], ctx)
         result = await self._executor(sql, params)
-        return _write_result(step, ctx, result)
+        return await _write_result_async(step, ctx, result)

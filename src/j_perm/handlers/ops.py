@@ -22,6 +22,7 @@ from typing import Any, Mapping
 import yaml as _yaml
 
 from ..core import ActionHandler, Compound, CompiledSpec, ExecutionContext
+from .merge import deep_update
 from .signals import BreakSignal, ContinueSignal, ReturnSignal
 
 
@@ -52,6 +53,16 @@ class SetHandler(ActionHandler):
 
         value = ctx.engine.process_value(step["value"], ctx)
 
+        return self._apply(ctx, path, create, extend_list, value)
+
+    def _apply(self, ctx: ExecutionContext, path: Any, create: bool,
+               extend_list: bool, value: Any) -> Any:
+        """Write *value* at *path* into ``ctx.dest`` (pure, no value-resolution).
+
+        Shared by the sync and async ``set`` handlers — both resolve
+        ``path``/``create``/``extend``/``value`` first (sync vs async), then
+        delegate the actual mutation here.
+        """
         # Handle '-' append (may need to convert parent to list or create it)
         if path.endswith("/-"):
             parent_path = path.rsplit("/", 1)[0] or "/"
@@ -161,7 +172,10 @@ class DeleteHandler(ActionHandler):
     def execute(self, step: Any, ctx: ExecutionContext) -> Any:
         path = ctx.engine.process_value(step["path"], ctx)
         ignore = bool(ctx.engine.process_value(step.get("ignore_missing", True), ctx))
+        return self._apply(ctx, path, ignore)
 
+    def _apply(self, ctx: ExecutionContext, path: Any, ignore: bool) -> Any:
+        """Delete *path* from ``ctx.dest`` (pure, no value-resolution)."""
         # Validate no '-'
         if path.endswith("/-"):
             raise ValueError("'-' not allowed in delete")
@@ -204,18 +218,44 @@ class ForeachHandler(ActionHandler, Compound):
     def __init__(self, max_items: int = 100_000) -> None:
         self._max_items = max_items
 
+    # Sentinel returned by ``_normalize_array`` when the loop should be skipped.
+    _SKIP = object()
+
     def nested_spec_keys(self, step: Any) -> list[str]:
         return ["do"]
 
-    def execute(self, step: Any, ctx: ExecutionContext) -> Any:
+    @staticmethod
+    def _validate_source(step: Any) -> tuple[bool, bool]:
+        """Validate the ``in`` / ``in_value`` combination, return their presence."""
         has_in = "in" in step
         has_in_value = "in_value" in step
-
         if has_in and has_in_value:
             raise ValueError("foreach operation cannot have both 'in' and 'in_value' parameters")
         if not has_in and not has_in_value:
             raise ValueError("foreach operation requires either 'in' or 'in_value' parameter")
+        return has_in, has_in_value
 
+    def _normalize_array(self, arr: Any, skip_empty: bool) -> Any:
+        """Normalise the source array (pure): skip sentinel, dict→items, size cap."""
+        if not arr and skip_empty:
+            return self._SKIP
+        if isinstance(arr, dict):
+            arr = list(arr.items())
+        arr_len = len(arr) if hasattr(arr, '__len__') else sum(1 for _ in arr)
+        if arr_len > self._max_items:
+            raise ValueError(
+                f"Foreach array size ({arr_len}) exceeds maximum ({self._max_items})"
+            )
+        return arr
+
+    def execute(self, step: Any, ctx: ExecutionContext) -> Any:
+        return self._run(step, ctx, None)
+
+    def execute_compiled(self, step: Any, ctx: ExecutionContext, nested: dict[str, CompiledSpec]) -> Any:
+        return self._run(step, ctx, nested.get("do"))
+
+    def _run(self, step: Any, ctx: ExecutionContext, compiled_body: Any) -> Any:
+        has_in, has_in_value = self._validate_source(step)
         skip_empty = bool(ctx.engine.process_value(step.get("skip_empty", True), ctx))
 
         if has_in_value:
@@ -228,18 +268,9 @@ class ForeachHandler(ActionHandler, Compound):
             except Exception:
                 arr = default
 
-        if not arr and skip_empty:
+        arr = self._normalize_array(arr, skip_empty)
+        if arr is self._SKIP:
             return ctx.dest
-
-        if isinstance(arr, dict):
-            arr = list(arr.items())
-
-        # Check array size
-        arr_len = len(arr) if hasattr(arr, '__len__') else sum(1 for _ in arr)
-        if arr_len > self._max_items:
-            raise ValueError(
-                f"Foreach array size ({arr_len}) exceeds maximum ({self._max_items})"
-            )
 
         var = ctx.engine.process_value(step.get("as", "item"), ctx)
         body = step["do"]
@@ -251,7 +282,10 @@ class ForeachHandler(ActionHandler, Compound):
                 # bindings (e.g. function parameters) remain accessible inside the body.
                 foreach_ctx = ctx.copy(new_temp_read_only={**ctx.temp_read_only, var: elem})
                 try:
-                    ctx.dest = ctx.engine.apply_to_context(body, foreach_ctx)
+                    if compiled_body is not None:
+                        ctx.dest = compiled_body.run(foreach_ctx)
+                    else:
+                        ctx.dest = ctx.engine.apply_to_context(body, foreach_ctx)
                 except ContinueSignal:
                     # Preserve changes made before $continue, skip to next element
                     ctx.dest = foreach_ctx.dest
@@ -263,65 +297,6 @@ class ForeachHandler(ActionHandler, Compound):
             raise  # Propagate without rollback
         except Exception:
             # Rollback on error
-            ctx.dest = snapshot
-            raise
-
-        return ctx.dest
-
-    def execute_compiled(self, step: Any, ctx: ExecutionContext, nested: dict[str, CompiledSpec]) -> Any:
-        has_in = "in" in step
-        has_in_value = "in_value" in step
-
-        if has_in and has_in_value:
-            raise ValueError("foreach operation cannot have both 'in' and 'in_value' parameters")
-        if not has_in and not has_in_value:
-            raise ValueError("foreach operation requires either 'in' or 'in_value' parameter")
-
-        skip_empty = bool(ctx.engine.process_value(step.get("skip_empty", True), ctx))
-
-        if has_in_value:
-            arr = ctx.engine.process_value(step["in_value"], ctx)
-        else:
-            arr_ptr = ctx.engine.process_value(step["in"], ctx)
-            default = copy.deepcopy(ctx.engine.process_value(step.get("default", []), ctx))
-            try:
-                arr = ctx.engine.processor.get(arr_ptr, ctx)
-            except Exception:
-                arr = default
-
-        if not arr and skip_empty:
-            return ctx.dest
-
-        if isinstance(arr, dict):
-            arr = list(arr.items())
-
-        arr_len = len(arr) if hasattr(arr, '__len__') else sum(1 for _ in arr)
-        if arr_len > self._max_items:
-            raise ValueError(
-                f"Foreach array size ({arr_len}) exceeds maximum ({self._max_items})"
-            )
-
-        var = ctx.engine.process_value(step.get("as", "item"), ctx)
-        body = step["do"]
-        compiled_body = nested.get("do")
-        snapshot = copy.deepcopy(ctx.dest)
-
-        try:
-            for elem in arr:
-                foreach_ctx = ctx.copy(new_temp_read_only={**ctx.temp_read_only, var: elem})
-                try:
-                    if compiled_body is not None:
-                        ctx.dest = compiled_body.run(foreach_ctx)
-                    else:
-                        ctx.dest = ctx.engine.apply_to_context(body, foreach_ctx)
-                except ContinueSignal:
-                    ctx.dest = foreach_ctx.dest
-                except BreakSignal:
-                    ctx.dest = foreach_ctx.dest
-                    break
-        except ReturnSignal:
-            raise
-        except Exception:
             ctx.dest = snapshot
             raise
 
@@ -381,39 +356,13 @@ class WhileHandler(ActionHandler, Compound):
         raise ValueError("while operation requires 'cond' or 'path'")
 
     def execute(self, step: Any, ctx: ExecutionContext) -> Any:
-        do_while = bool(ctx.engine.process_value(step.get("do_while", False), ctx))
-        snapshot = copy.deepcopy(ctx.dest)
-
-        try:
-            iteration = 0
-            while True:
-                if iteration >= self._max_iterations:
-                    raise RuntimeError(
-                        f"While loop exceeded maximum iterations ({self._max_iterations})"
-                    )
-                if not do_while and not self._eval_condition(step, ctx):
-                    break
-
-                try:
-                    ctx.dest = ctx.engine.apply_to_context(step["do"], ctx)
-                except ContinueSignal:
-                    pass
-                except BreakSignal:
-                    break
-
-                do_while = False
-                iteration += 1
-        except ReturnSignal:
-            raise  # Propagate without rollback
-        except Exception:
-            ctx.dest = snapshot
-            raise
-
-        return ctx.dest
+        return self._run(step, ctx, None)
 
     def execute_compiled(self, step: Any, ctx: ExecutionContext, nested: dict[str, CompiledSpec]) -> Any:
+        return self._run(step, ctx, nested.get("do"))
+
+    def _run(self, step: Any, ctx: ExecutionContext, compiled_body: Any) -> Any:
         do_while = bool(ctx.engine.process_value(step.get("do_while", False), ctx))
-        compiled_body = nested.get("do")
         body = step["do"]
         snapshot = copy.deepcopy(ctx.dest)
 
@@ -440,7 +389,7 @@ class WhileHandler(ActionHandler, Compound):
                 do_while = False
                 iteration += 1
         except ReturnSignal:
-            raise
+            raise  # Propagate without rollback
         except Exception:
             ctx.dest = snapshot
             raise
@@ -502,23 +451,12 @@ class IfHandler(ActionHandler, Compound):
         return branch_key if branch_key in step else ("do" if cond_val else None)
 
     def execute(self, step: Any, ctx: ExecutionContext) -> Any:
-        cond_val = self._eval_condition(step, ctx)
-        branch_key = self._get_branch_key(step, cond_val)
-        actions = step.get(branch_key)
-
-        if not actions:
-            return ctx.dest
-
-        snapshot = copy.deepcopy(ctx.dest)
-        try:
-            return ctx.engine.apply_to_context(actions, ctx)
-        except (BreakSignal, ContinueSignal, ReturnSignal):
-            raise  # Don't rollback — propagate control flow signals as-is
-        except Exception:
-            ctx.dest = snapshot
-            raise
+        return self._run(step, ctx, None)
 
     def execute_compiled(self, step: Any, ctx: ExecutionContext, nested: dict[str, CompiledSpec]) -> Any:
+        return self._run(step, ctx, nested)
+
+    def _run(self, step: Any, ctx: ExecutionContext, nested: Any) -> Any:
         cond_val = self._eval_condition(step, ctx)
         branch_key = self._get_branch_key(step, cond_val)
         actions = step.get(branch_key)
@@ -526,14 +464,14 @@ class IfHandler(ActionHandler, Compound):
         if not actions:
             return ctx.dest
 
-        compiled_branch = nested.get(branch_key) if branch_key else None
+        compiled_branch = nested.get(branch_key) if (nested and branch_key) else None
         snapshot = copy.deepcopy(ctx.dest)
         try:
             if compiled_branch is not None:
                 return compiled_branch.run(ctx)
             return ctx.engine.apply_to_context(actions, ctx)
         except (BreakSignal, ContinueSignal, ReturnSignal):
-            raise
+            raise  # Don't rollback — propagate control flow signals as-is
         except Exception:
             ctx.dest = snapshot
             raise
@@ -638,6 +576,11 @@ class UpdateHandler(ActionHandler):
         else:
             raise ValueError("update operation requires either 'from' or 'value' parameter")
 
+        return self._apply(ctx, path, create, deep, update_value)
+
+    def _apply(self, ctx: ExecutionContext, path: Any, create: bool,
+               deep: bool, update_value: Any) -> Any:
+        """Merge *update_value* into the mapping at *path* (pure, no resolution)."""
         if not isinstance(update_value, Mapping):
             raise TypeError(f"update value must be a dict, got {type(update_value).__name__}")
 
@@ -655,13 +598,6 @@ class UpdateHandler(ActionHandler):
             raise TypeError(f"{path} is not a dict, cannot update")
 
         if deep:
-            def deep_update(dst: Any, src_val: Mapping) -> None:
-                for key, value in src_val.items():
-                    if key in dst and isinstance(dst[key], Mapping) and isinstance(value, Mapping):
-                        deep_update(dst[key], value)
-                    else:
-                        dst[key] = copy.deepcopy(value)
-
             deep_update(target, update_value)
         else:
             target.update(update_value)
@@ -688,14 +624,16 @@ class DistinctHandler(ActionHandler):
 
     def execute(self, step: Any, ctx: ExecutionContext) -> Any:
         path = ctx.engine.process_value(step["path"], ctx)
+        key = step.get("key", None)
+        key_path = ctx.engine.process_value(key, ctx) if key is not None else None
+        return self._apply(ctx, path, key, key_path)
+
+    def _apply(self, ctx: ExecutionContext, path: Any, key: Any, key_path: Any) -> Any:
+        """Deduplicate the list at *path* in place (pure, no value-resolution)."""
         lst = ctx.engine.processor.get("@:" + path, ctx)
 
         if not isinstance(lst, list):
             raise TypeError(f"{path} is not a list (distinct)")
-
-        key = step.get("key", None)
-        if key is not None:
-            key_path = ctx.engine.process_value(key, ctx)
 
         seen = set()
         unique = []

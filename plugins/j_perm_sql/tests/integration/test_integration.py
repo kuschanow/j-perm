@@ -1,6 +1,6 @@
 """End-to-end integration tests through engine.apply / apply_async."""
 import pytest
-from j_perm import build_default_engine
+from j_perm import build_default_engine, build_default_async_engine
 
 from j_perm_sql import RenderOptions, install_sql
 
@@ -111,3 +111,51 @@ class TestAsyncIntegration:
         )
         assert out == {"rows": [{"n": 1}]}
         assert calls[0] == ('SELECT * FROM "t" WHERE "id" = %s', [7])
+
+    @pytest.mark.asyncio
+    async def test_async_engine_embedded_ref_in_foreach(self):
+        """On the async engine the value pipeline is async; an embedded ``$ref``
+        inside a ``$val`` must resolve via the restart protocol (no leaked
+        coroutine), including inside an async ``foreach`` body."""
+        engine = build_default_async_engine()
+        calls = []
+
+        async def executor(sql, params):
+            calls.append((sql, list(params)))
+            return [{"id": params[0]}]
+
+        install_sql(engine, executor)
+        query = {"$select": {
+            "columns": [{"$col": {"name": "id"}}],
+            "from": {"table": "u"},
+            "where": {"$eq": [{"$col": {"name": "id"}}, {"$val": {"$ref": "&:/id"}}]},
+        }}
+        out = await engine.apply_async(
+            {"op": "foreach", "in": "/ids", "as": "id", "do": [
+                {"op": "sql", "query": query, "to": "/rows/-"}]},
+            source={"ids": [10, 20]}, dest={"rows": []},
+        )
+        assert [p for _, p in calls] == [[10], [20]]
+        assert out == {"rows": [[{"id": 10}], [{"id": 20}]]}
+
+    @pytest.mark.asyncio
+    async def test_async_engine_parallel_foreach(self):
+        engine = build_default_async_engine()
+
+        async def executor(sql, params):
+            return [{"id": params[0]}]
+
+        install_sql(engine, executor)
+        query = {"$select": {
+            "columns": [{"$col": {"name": "id"}}],
+            "from": {"table": "u"},
+            "where": {"$in": [{"$col": {"name": "id"}}, {"$ref": "&:/ids"}]},
+        }}
+        # parallel iterations run on isolated fresh dests; results fold in via
+        # ordered deep_merge (list-concat), so each writes its own /out list.
+        out = await engine.apply_async(
+            {"op": "foreach", "in_value": [[1, 2], [3]], "as": "ids", "parallel": True,
+             "do": [{"op": "sql", "query": query, "to": "/out"}]},
+            source={}, dest={},
+        )
+        assert out == {"out": [{"id": 1}, {"id": 3}]}

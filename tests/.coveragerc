@@ -2,6 +2,9 @@
 
 [run]
 data_file = tests/.coverage
+omit =
+    */j_perm/text/_generated/*
+    */j_perm/text/grammar/*
 
 [html]
 directory = tests/report
