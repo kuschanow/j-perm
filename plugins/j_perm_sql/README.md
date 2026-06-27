@@ -61,6 +61,52 @@ engine.apply(
 pipeline and the `op: sql` operation. It composes with any engine and any other
 plugins.
 
+## Text syntax (`sql{ … }` / `sql_write{ … }`)
+
+If the engine has j-perm's [text syntax](https://github.com/kuschanow/j-perm#9-text-syntax)
+enabled (the default), `install_sql` / `install_sql_write` also register a
+high-priority stage that lets you write queries as text **out of the box** — no
+extra setup, no parser to ship:
+
+```python
+engine = build_default_engine()       # text_syntax=True by default
+install_sql(engine, run_sql)          # registers the sql{ … } stage too
+
+engine.apply([
+    "/min = 18",
+    "/rows = sql{ select id, name from users where age >= $(/min) }",
+], source={"min": 18}, dest={})
+# run_sql receives: ('SELECT "id", "name" FROM "users" WHERE "age" >= ?', [18])
+# result written to /rows
+```
+
+* `sql{ … }` parses **`SELECT` only** (guaranteed read-only) and emits
+  `op: sql`; `sql_write{ … }` parses `INSERT`/`UPDATE`/`DELETE` and emits
+  `op: sql_write`. A `sql{ … }` block containing DML raises.
+* An optional `/dst = sql{ … }` prefix becomes the op's `to`; a standalone block
+  discards the result.
+* `$(/ptr)` inside a query becomes a bound `$val` parameter — the same
+  injection-safe value pipeline as the JSON form. Identifiers stay identifiers.
+* The plugin owns an **independent** SQL parser; it does not extend j-perm's core
+  grammar. Each `sql{ … }` / `sql_write{ … }` block is a separate element of the
+  spec list and mixes freely with text and JSON steps.
+
+```python
+engine.apply(
+    'sql_write{ insert into audit (event) values ($(/event)) }',
+    source={"event": "queried"}, dest={},
+)
+# run_sql receives: ('INSERT INTO "audit" ("event") VALUES (?)', ["queried"])
+```
+
+Disable it with `install_sql(engine, run_sql, text_syntax=False)` (or
+`install_sql_write(..., text_syntax=False)`) to register only the op handler.
+The same **WHERE guard** applies: `update`/`delete` without a `where` must end in
+`all` (`update t set x = 1 all`).
+
+The grammar is generated at development time and the standalone output is
+committed, so **the package has no extra runtime dependency** for text support.
+
 ## The `op: sql` operation
 
 ```js

@@ -3,7 +3,7 @@
 A composable JSON transformation DSL with a powerful, extensible architecture.
 
 J-Perm lets you describe data transformations as **executable specifications** — a list of steps that can be applied to input documents. It supports
-JSON Pointer addressing with slicing (arrays and strings), template interpolation with `${...}` syntax, special constructs (`$ref`, `$eval`, `$cast`, `$raw`), logical and comparison operators (`$and`, `$or`, `$not`), comparison operators (6 operators plus `$in` and `$exists`), mathematical operations (6 operators), comprehensive string manipulation (11 operations), regular expressions (5 operations), user-defined functions (`$def`, `$func`, `$raise`) with loop/function control flow (`$break`, `$continue`, `$return`), error handling (`try-except-finally`), and a rich set of built-in operations — all with configurable security limits to prevent DoS attacks.
+JSON Pointer addressing with slicing (arrays and strings), template interpolation with `${...}` syntax, special constructs (`$ref`, `$eval`, `$cast`, `$raw`), logical and comparison operators (`$and`, `$or`, `$not`), comparison operators (6 operators plus `$in` and `$exists`), mathematical operations (6 operators), comprehensive string manipulation (11 operations), regular expressions (5 operations), user-defined functions (`$def`, `$func`, `$raise`) with loop/function control flow (`$break`, `$continue`, `$return`), error handling (`try-except-finally`), and a rich set of built-in operations — all with configurable security limits to prevent DoS attacks. Specs can be written as JSON op-dicts or in a compact [text syntax](#9-text-syntax) (the two mix freely in one list).
 
 ---
 
@@ -1696,6 +1696,128 @@ Expands to:
 ```
 
 **Priority order:** `~assert` (100) → `~delete` (50) → pointer/literal assignment (0)
+
+---
+
+### 9. Text Syntax
+
+Specs can be written in a compact **text syntax** instead of raw op-dicts. A
+text step is just a `str` element in the spec list; a `ParseTextStage` (priority
+`1000`, registered by `build_default_engine(text_syntax=True)` — the default)
+parses it into op-dicts before execution. Text and JSON **mix freely** in one
+list: string elements are parsed, everything else is passed through untouched.
+
+```python
+engine = build_default_engine()              # text_syntax=True by default
+
+engine.apply([
+    "/min_age = 18",                          # text  → op: set
+    {"op": "set", "path": "/tag", "value": "x"},  # raw JSON — untouched
+    "/adults <- /users ?? []",                # text  → op: copy with default
+], source={"users": [...]}, dest={})
+```
+
+A single string may hold many statements (separated by newlines or `;`) and may
+expand into several steps. Blocks use **either** indentation (`:` + indent)
+**or** braces `{ … }`. Set `build_default_engine(text_syntax=False)` (or the
+async builder) to skip stage registration entirely — string steps then raise the
+usual "unhandled step" error.
+
+To parse text to op-dicts directly (e.g. for inspection):
+
+```python
+from j_perm.text import parse_text
+parse_text("/x = 1 + 2")   # → [{"op": "set", "path": "/x", "value": {"$add": [1, 2]}}]
+```
+
+#### Statements
+
+| Text | Op-dict |
+|---|---|
+| `/path = EXPR` | `{op: set, path, value: EXPR}` |
+| `/path[] = EXPR` | `set` with `path` `.../-` (append) |
+| `/dst <- /src` | `{op: copy, from, path, ignore_missing: true}` |
+| `/dst <-! /src` | `copy` with `ignore_missing: false` (strict) |
+| `/dst <- /src ?? EXPR` | `copy` with `default: EXPR` |
+| `del /a, /b` | one `{op: delete, ignore_missing: true}` per pointer |
+| `del! /a` | `delete` with `ignore_missing: false` |
+| `assert /x` | `{op: assert, path}` (presence only) |
+| `assert /x == EXPR` | `assert` with `equals: EXPR` |
+| `if EXPR: … [elif EXPR: …] [else: …]` | `{op: if, cond, then, else?}` (elif → nested if) |
+| `foreach v in /src: …` | `{op: foreach, as, in, do}` (bare pointer → `in`) |
+| `foreach v in EXPR: …` | `foreach` with `in_value` (non-pointer source) |
+| `foreach v in /src default EXPR: …` | `foreach` with `default` |
+| `while EXPR: …` | `{op: while, cond, do}` |
+| `do: … while EXPR` | `while` with `do_while: true` |
+| `try: … except: … finally: …` | `{op: try, do, except?, finally?}` |
+| `def name(a, b) [context=copy]: …` | `{$def, params, context?, body, on_failure?}` |
+| `return [EXPR]` | `{$return: EXPR \| null}` |
+| `raise EXPR` | `{$raise: EXPR}` |
+| `break` / `continue` | `{$break: null}` / `{$continue: null}` |
+| `exec /script [merge]` / `exec: …` | `{op: exec, from \| actions, merge?}` |
+| `op "name"(key: v): …` | `{op: "name", key: v, do?: …}` (generic escape hatch) |
+| `name(args)` | `{$func: name, args}` (call as a step) |
+
+A trailing `on_failure: …` block on a `def` becomes `$def.on_failure`.
+
+```text
+def greet(name) context=copy:
+    /msg = "Hello, ${&:/name}!"
+    return /msg
+
+foreach item in /users:
+    if $(&:/item/age) >= 18:
+        /adults[] = $(&:/item)
+```
+
+#### Expressions
+
+Literals: `42`, `3.14`, `"text ${...}"`, `true`, `false`, `null`,
+`[EXPR, …]` (list), `{ k: EXPR, "k2": EXPR }` (dict). A **bare** pointer like
+`/price` in value position is a **string literal** `"/price"`; to *read* a
+pointer use `$(...)`.
+
+| Text | Value |
+|---|---|
+| `$(/u/name)`, `$(@:/t)`, `$(&:/item)` | `{$ref: path}` |
+| `$(/p ?? EXPR)` | `{$ref, $default}` |
+| `$(/p) raw` | `{$ref, $raw: true}` |
+| `not X` | `{$not: X}` |
+| `-X` | negated number, or `{$sub: [0, X]}` |
+| `exists /p` | `{$exists: "/p"}` |
+| `a ** b` | `{$pow}` (right-assoc.) |
+| `* / %` | `{$mul / $div / $mod}` |
+| `+ -` | `{$add / $sub}` |
+| `== != < <= > >=` | `{$eq / $ne / $lt / $lte / $gt / $gte}` |
+| `X in Y` | `{$in: [X, Y]}` |
+| `and` / `or` / `??` | `{$and}` / `{$or}` / `{$or}` (coalesce) |
+
+Calls map known names to constructs; anything else becomes a `$func`:
+
+| Call | Construct |
+|---|---|
+| `int/float/bool/str(x)` | `{$cast}` |
+| `upper/lower/strip/lstrip/rstrip(...)` | `$str_*` |
+| `split/join/replace/contains/startswith/endswith/slice(...)` | `$str_*` |
+| `round(x, n, mode: "ceil")` | `{$round}` |
+| `regex_match/search/findall/groups/replace(..., flags: N)` | `$regex_*` |
+| `ref(/p, default: …)` | `{$ref, $default}` |
+| `raw(EXPR)` | `{$raw: EXPR}` |
+| `eval { BLOCK } select /x` | `{$eval, $select?}` |
+| `factorial(5)` | `{$func: "factorial", args: [5]}` |
+
+> Strings use native `${...}` interpolation, resolved at runtime by the value
+> pipeline (see [Template Interpolation](#2-template-interpolation-)). The text
+> parser only builds structure; `$ref`, casts, limits, and `${...}` all run
+> exactly as in JSON specs.
+
+#### Nested sublanguages (`tag{ … }`)
+
+A plugin can register its own high-priority stage that recognises `tag{ … }`
+blocks and parses their raw contents with an **independent** parser, emitting
+op-dicts before the core text stage runs. The core grammar knows nothing about
+these tags. The j-perm-sql plugin ships `sql{ … }` and `sql_write{ … }` this way
+— see its README.
 
 ---
 
