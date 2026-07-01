@@ -9,7 +9,7 @@ handler in ``ops.py``.
 from typing import Any
 
 from j_perm import ActionHandler, ExecutionContext, ActionMatcher
-from .signals import BreakSignal, ContinueSignal
+from .signals import BreakSignal, ContinueSignal, ExitSignal
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -95,3 +95,56 @@ class ContinueHandler(ActionHandler):
 
     def execute(self, step: Any, ctx: ExecutionContext) -> Any:
         raise ContinueSignal()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# $exit — terminate the whole script early, without error
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ExitMatcher(ActionMatcher):
+    """Match a step by checking the ``$exit`` field."""
+
+    def matches(self, step: Any) -> bool:
+        return isinstance(step, dict) and "$exit" in step
+
+
+class ExitHandler(ActionHandler):
+    """``$exit`` — terminate the entire script early, cleanly (no error raised).
+
+    Schema::
+
+        {"$exit": null}
+
+    The value is ignored; only the presence of the ``$exit`` key matters.
+    Whatever has been written to ``dest`` up to this point is preserved and
+    returned as the final result.
+
+    Unlike ``$break`` / ``$continue`` (which only affect the innermost loop) and
+    ``$return`` (which only exits the current function), ``$exit`` unwinds
+    *everything* — loops, ``if`` / ``try`` blocks, functions and nested
+    ``exec`` / named pipelines — up to the top-level engine call, which returns
+    the document built so far.  ``try`` ``finally`` blocks still run on the way
+    out.
+
+    Example — stop the whole script as soon as an error marker is found::
+
+        {
+            "op": "foreach",
+            "in": "/items",
+            "as": "item",
+            "do": [
+                {
+                    "op": "if",
+                    "cond": {"$eq": [{"$ref": "&:/item/status"}, "fatal"]},
+                    "then": [
+                        {"op": "set", "path": "/aborted", "value": true},
+                        {"$exit": null}
+                    ]
+                },
+                {"op": "set", "path": "/result/-", "value": "&:/item"}
+            ]
+        }
+    """
+
+    def execute(self, step: Any, ctx: ExecutionContext) -> Any:
+        raise ExitSignal()

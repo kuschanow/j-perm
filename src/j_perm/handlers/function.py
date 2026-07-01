@@ -2,7 +2,7 @@ from typing import Any
 
 from j_perm import ActionHandler, ExecutionContext, ActionMatcher
 from j_perm.core import Compound, CompiledSpec
-from .signals import ReturnSignal
+from .signals import ReturnSignal, ExitSignal
 
 
 class DefMatcher(ActionMatcher):
@@ -87,6 +87,8 @@ class DefHandler(ActionHandler, Compound):
                 return result
             except ReturnSignal as e:
                 return e.value
+            except ExitSignal:
+                raise  # $exit unwinds the whole script — bypass on_failure
             except Exception as e:
                 if on_failure is not None:
                     call_ctx = ctx.metadata.get('_current_call_ctx', ctx)

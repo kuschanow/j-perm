@@ -40,13 +40,14 @@ from .container import ContainerMatcher, RecursiveDescentHandler
 from .flow import (
     BreakMatcher, BreakHandler,
     ContinueMatcher, ContinueHandler,
+    ExitMatcher, ExitHandler,
 )
 from .function import (
     DefMatcher, CallMatcher, DefHandler, CallHandler,
     RaiseMatcher, RaiseHandler, JPermError,
     ReturnMatcher, ReturnHandler,
 )
-from .signals import BreakSignal, ContinueSignal, ReturnSignal, RawValueSignal
+from .signals import BreakSignal, ContinueSignal, ReturnSignal, ExitSignal, RawValueSignal
 from .identity import IdentityHandler
 from .ops import (
     SetHandler, CopyHandler,
@@ -143,6 +144,8 @@ __all__ = [
     "BreakHandler",
     "ContinueMatcher",
     "ContinueHandler",
+    "ExitMatcher",
+    "ExitHandler",
     # function
     "DefMatcher",
     "CallMatcher",
@@ -157,6 +160,7 @@ __all__ = [
     "BreakSignal",
     "ContinueSignal",
     "ReturnSignal",
+    "ExitSignal",
     "RawValueSignal",
     # raw construct
     "raw_handler",

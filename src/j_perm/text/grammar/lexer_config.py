@@ -93,7 +93,7 @@ LEXER_CONFIG = {
                 {"keywords": [
                     "foreach", "in", "while", "do", "if", "elif", "else",
                     "try", "except", "finally", "def", "return", "raise",
-                    "break", "continue", "exec", "and", "or", "not", "exists",
+                    "break", "continue", "exit", "exec", "and", "or", "not", "exists",
                     "true", "false", "null", "del", "assert", "op", "raw",
                 ], "emit": "KW"},
 

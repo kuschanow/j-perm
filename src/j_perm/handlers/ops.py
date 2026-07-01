@@ -23,7 +23,7 @@ import yaml as _yaml
 
 from ..core import ActionHandler, Compound, CompiledSpec, ExecutionContext
 from .merge import deep_update
-from .signals import BreakSignal, ContinueSignal, ReturnSignal
+from .signals import BreakSignal, ContinueSignal, ReturnSignal, ExitSignal
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -293,6 +293,11 @@ class ForeachHandler(ActionHandler, Compound):
                     # Preserve changes made before $break, stop the loop
                     ctx.dest = foreach_ctx.dest
                     break
+        except ExitSignal:
+            # $exit ends the whole script — keep the dest built so far
+            # (including changes made in this iteration) and propagate.
+            ctx.dest = foreach_ctx.dest
+            raise
         except ReturnSignal:
             raise  # Propagate without rollback
         except Exception:
@@ -388,8 +393,8 @@ class WhileHandler(ActionHandler, Compound):
 
                 do_while = False
                 iteration += 1
-        except ReturnSignal:
-            raise  # Propagate without rollback
+        except (ReturnSignal, ExitSignal):
+            raise  # Propagate without rollback ($return / $exit)
         except Exception:
             ctx.dest = snapshot
             raise
@@ -470,7 +475,7 @@ class IfHandler(ActionHandler, Compound):
             if compiled_branch is not None:
                 return compiled_branch.run(ctx)
             return ctx.engine.apply_to_context(actions, ctx)
-        except (BreakSignal, ContinueSignal, ReturnSignal):
+        except (BreakSignal, ContinueSignal, ReturnSignal, ExitSignal):
             raise  # Don't rollback — propagate control flow signals as-is
         except Exception:
             ctx.dest = snapshot
@@ -828,7 +833,7 @@ class TryHandler(ActionHandler, Compound):
 
         try:
             self._run_body(do_actions, compiled_do, ctx)
-        except (BreakSignal, ContinueSignal, ReturnSignal):
+        except (BreakSignal, ContinueSignal, ReturnSignal, ExitSignal):
             if finally_actions is not None:
                 try:
                     self._run_body(finally_actions, compiled_finally, ctx)

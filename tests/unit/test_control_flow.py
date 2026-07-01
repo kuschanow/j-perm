@@ -1,9 +1,9 @@
-"""Tests for loop and function control flow: $break, $continue, $return."""
+"""Tests for loop and function control flow: $break, $continue, $return, $exit."""
 
 import pytest
 
 from j_perm import build_default_engine
-from j_perm.handlers.signals import BreakSignal, ContinueSignal, ReturnSignal
+from j_perm.handlers.signals import BreakSignal, ContinueSignal, ReturnSignal, ExitSignal
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -852,3 +852,182 @@ class TestOutOfContext:
             )
 
         assert exc_info.value.value == "deep"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# $exit — early, error-free termination of the whole script
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestExit:
+
+    def test_exit_at_top_level_stops_remaining_steps(self):
+        """$exit halts the script and returns the dest built so far."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            [
+                {"/a": 1},
+                {"$exit": None},
+                {"/b": 2},
+            ],
+            source={},
+            dest={},
+        )
+
+        assert result == {"a": 1}
+
+    def test_exit_terminates_whole_script_from_foreach(self):
+        """$exit inside foreach unwinds the loop *and* the outer script."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            [
+                {
+                    "op": "foreach",
+                    "in": "/items",
+                    "as": "item",
+                    "do": [
+                        {
+                            "op": "if",
+                            "cond": {"$eq": [{"$ref": "&:/item"}, "stop"]},
+                            "then": [{"/aborted": True}, {"$exit": None}],
+                        },
+                        {"/result[]": "&:/item"},
+                    ],
+                },
+                {"/after": True},
+            ],
+            source={"items": ["a", "b", "stop", "c"]},
+            dest={"result": []},
+        )
+
+        # loop-so-far preserved, but no /after — the whole script stopped
+        assert result == {"result": ["a", "b"], "aborted": True}
+
+    def test_exit_terminates_whole_script_from_while(self):
+        engine = build_default_engine()
+
+        result = engine.apply(
+            [
+                {"/counter": 0},
+                {
+                    "op": "while",
+                    "cond": {"$lt": [{"$ref": "@:/counter"}, 10]},
+                    "do": [
+                        {
+                            "op": "if",
+                            "cond": {"$eq": [{"$ref": "@:/counter"}, 3]},
+                            "then": [{"$exit": None}],
+                        },
+                        {"/counter": {"$add": [{"$ref": "@:/counter"}, 1]}},
+                    ],
+                },
+                {"/after": True},
+            ],
+            source={},
+            dest={},
+        )
+
+        assert result == {"counter": 3}
+
+    def test_exit_from_nested_if(self):
+        engine = build_default_engine()
+
+        result = engine.apply(
+            [
+                {"/a": 1},
+                {"op": "if", "cond": True, "then": [
+                    {"op": "if", "cond": True, "then": [{"$exit": None}]},
+                    {"/never": True},
+                ]},
+                {"/after": True},
+            ],
+            source={},
+            dest={},
+        )
+
+        assert result == {"a": 1}
+
+    def test_exit_runs_finally_but_not_except(self):
+        """try lets $exit through: finally runs, except does not."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            [
+                {
+                    "op": "try",
+                    "do": [{"/x": 1}, {"$exit": None}],
+                    "except": [{"/caught": True}],
+                    "finally": [{"/cleaned": True}],
+                },
+                {"/after": True},
+            ],
+            source={},
+            dest={},
+        )
+
+        assert result == {"x": 1, "cleaned": True}
+
+    def test_exit_from_function_bypasses_on_failure(self):
+        """$exit unwinds through a function without triggering on_failure."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            [
+                {
+                    "$def": "f",
+                    "params": [],
+                    "context": "shared",
+                    "body": [{"/in_func": True}, {"$exit": None}],
+                    "on_failure": [{"/failed": True}],
+                },
+                {"/before": 1},
+                {"$func": "f"},
+                {"/after": 2},
+            ],
+            source={},
+            dest={},
+        )
+
+        assert result == {"before": 1, "in_func": True}
+
+    def test_exit_from_exec(self):
+        engine = build_default_engine()
+
+        result = engine.apply(
+            [
+                {"/a": 1},
+                {"op": "exec", "merge": True, "actions": [{"/b": 2}, {"$exit": None}, {"/c": 3}]},
+                {"/after": True},
+            ],
+            source={},
+            dest={},
+        )
+
+        assert result == {"a": 1, "b": 2}
+
+    def test_exit_compiled(self):
+        """$exit works on the compiled execution path too."""
+        engine = build_default_engine()
+
+        compiled = engine.compile([
+            {"/a": 1},
+            {"op": "foreach", "in_value": [1, 2, 3], "as": "it", "do": [
+                {"op": "if", "cond": {"$eq": [{"$ref": "&:/it"}, 2]},
+                 "then": [{"$exit": None}]},
+                {"/seen[]": "&:/it"},
+            ]},
+            {"/after": True},
+        ])
+        result = compiled.apply(source={}, dest={})
+
+        assert result == {"a": 1, "seen": [1]}
+
+    def test_exit_signal_escapes_when_run_via_apply_to_context(self):
+        """apply_to_context does not swallow $exit (only top-level apply does)."""
+        from j_perm import ExecutionContext
+
+        engine = build_default_engine()
+        ctx = ExecutionContext(source={}, dest={}, engine=engine)
+        with pytest.raises(ExitSignal):
+            engine.apply_to_context([{"/a": 1}, {"$exit": None}], ctx)

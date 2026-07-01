@@ -3,7 +3,7 @@
 A composable JSON transformation DSL with a powerful, extensible architecture.
 
 J-Perm lets you describe data transformations as **executable specifications** — a list of steps that can be applied to input documents. It supports
-JSON Pointer addressing with slicing (arrays and strings), template interpolation with `${...}` syntax, special constructs (`$ref`, `$eval`, `$cast`, `$raw`), logical and comparison operators (`$and`, `$or`, `$not`), comparison operators (6 operators plus `$in` and `$exists`), mathematical operations (6 operators), comprehensive string manipulation (11 operations), regular expressions (5 operations), user-defined functions (`$def`, `$func`, `$raise`) with loop/function control flow (`$break`, `$continue`, `$return`), error handling (`try-except-finally`), and a rich set of built-in operations — all with configurable security limits to prevent DoS attacks. Specs can be written as JSON op-dicts or in a compact [text syntax](#9-text-syntax) (the two mix freely in one list).
+JSON Pointer addressing with slicing (arrays and strings), template interpolation with `${...}` syntax, special constructs (`$ref`, `$eval`, `$cast`, `$raw`), logical and comparison operators (`$and`, `$or`, `$not`), comparison operators (6 operators plus `$in` and `$exists`), mathematical operations (6 operators), comprehensive string manipulation (11 operations), regular expressions (5 operations), user-defined functions (`$def`, `$func`, `$raise`) with loop/function/script control flow (`$break`, `$continue`, `$return`, `$exit`), error handling (`try-except-finally`), and a rich set of built-in operations — all with configurable security limits to prevent DoS attacks. Specs can be written as JSON op-dicts or in a compact [text syntax](#9-text-syntax) (the two mix freely in one list).
 
 ---
 
@@ -367,7 +367,7 @@ Language call stack (innermost last):
   #3   {'op': 'set', 'path': '/result/-', 'value': {'$ref': '/missing/path'}}
 ```
 
-**Important:** Errors caught by `{"op": "try", ...}` inside the spec are **not logged** — only errors that propagate all the way out of `apply()` appear in the log. Control flow signals (`$break`, `$continue`, `$return`) are never treated as errors.
+**Important:** Errors caught by `{"op": "try", ...}` inside the spec are **not logged** — only errors that propagate all the way out of `apply()` appear in the log. Control flow signals (`$break`, `$continue`, `$return`, `$exit`) are never treated as errors.
 
 The call stack is also attached to the exception itself for programmatic access:
 
@@ -1427,7 +1427,7 @@ spec = [
 
 ### 7. Loop Control Flow
 
-`$break`, `$continue`, and `$return` are **control flow commands** for interrupting loops and functions.  They are top-level actions (registered in the main pipeline) and work from anywhere inside a loop or function body — including inside nested `if`, `try`, or even other loops.
+`$break`, `$continue`, `$return`, and `$exit` are **control flow commands** for interrupting loops, functions, and the whole script.  They are top-level actions (registered in the main pipeline) and work from anywhere inside a loop or function body — including inside nested `if`, `try`, or even other loops.
 
 #### `$break` — Exit a loop
 
@@ -1547,6 +1547,47 @@ spec = [
 
 result = engine.apply(spec, source={}, dest={})
 # → {"found": "b"}
+```
+
+#### `$exit` — Terminate the whole script early
+
+```json
+{"$exit": null}
+```
+
+Stops the **entire** script immediately, without raising an error.  Whatever has been written to the destination so far is preserved and returned as the final result.  The value is ignored — only the presence of the `$exit` key matters.
+
+Unlike `$break` / `$continue` (which affect only the innermost loop) and `$return` (which exits only the current function), `$exit` unwinds *everything* — loops, `if` / `try` blocks, functions and nested `exec` / named pipelines — up to the top-level `apply()` call.  `try` `finally` blocks still run on the way out, and a function's `on_failure` is **not** triggered (an `$exit` is not an error).
+
+```python
+spec = [
+    {
+        "op": "foreach",
+        "in": "/items",
+        "as": "item",
+        "do": [
+            {
+                "op": "if",
+                "cond": {"$eq": [{"$ref": "&:/item/status"}, "fatal"]},
+                "then": [
+                    {"/aborted": True},
+                    {"$exit": None},
+                ],
+            },
+            {"/processed[]": {"$ref": "&:/item/id"}},
+        ],
+    },
+    {"/done": True},   # never reached once $exit fires
+]
+
+result = engine.apply(
+    spec,
+    source={"items": [{"id": 1, "status": "ok"},
+                      {"id": 2, "status": "fatal"},
+                      {"id": 3, "status": "ok"}]},
+    dest={"processed": []},
+)
+# → {"processed": [1], "aborted": True}
 ```
 
 #### Interaction with `try`
@@ -1754,11 +1795,15 @@ parse_text("/x = 1 + 2")   # → [{"op": "set", "path": "/x", "value": {"$add": 
 | `return [EXPR]` | `{$return: EXPR \| null}` |
 | `raise EXPR` | `{$raise: EXPR}` |
 | `break` / `continue` | `{$break: null}` / `{$continue: null}` |
+| `exit` | `{$exit: null}` (terminate the whole script early) |
 | `exec /script [merge]` / `exec: …` | `{op: exec, from \| actions, merge?}` |
 | `op "name"(key: v): …` | `{op: "name", key: v, do?: …}` (generic escape hatch) |
 | `name(args)` | `{$func: name, args}` (call as a step) |
 
 A trailing `on_failure: …` block on a `def` becomes `$def.on_failure`.
+
+Blocks nest to any depth; a nested suite may dedent back and be followed by
+sibling statements at the outer level (as `/seen[]` is below):
 
 ```text
 def greet(name) context=copy:
@@ -1768,6 +1813,9 @@ def greet(name) context=copy:
 foreach item in /users:
     if $(&:/item/age) >= 18:
         /adults[] = $(&:/item)
+    /seen[] = $(&:/item/name)
+    if $(&:/item/name) == "stop":
+        exit
 ```
 
 #### Expressions

@@ -41,6 +41,23 @@ class ReturnSignal(ControlFlowSignal):
         super().__init__("$return used outside of a function")
 
 
+class ExitSignal(ControlFlowSignal):
+    """Raised by ``$exit`` to terminate the whole script early — cleanly.
+
+    Unlike the loop-local ``$break`` / ``$continue`` and the function-local
+    ``$return`` (each handled by its enclosing handler), ``ExitSignal``
+    propagates all the way up to the top-level engine entry point
+    (``Engine.apply`` / ``Engine.apply_compiled`` and their async twins), which
+    catches it and returns the document built so far — no error is raised.
+    Compound handlers (loops, ``if``, ``try``, ``$def``) let it pass through
+    without rolling back ``dest``; ``try`` still runs its ``finally`` block on
+    the way out.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("$exit: script terminated early")
+
+
 class RawValueSignal(PipelineSignal):
     """Raised to short-circuit the value-pipeline stabilisation loop.
 

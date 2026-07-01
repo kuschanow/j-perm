@@ -23,7 +23,13 @@ __all__ = ["parse_text", "register_text_stage", "ParseTextStage"]
 
 
 def parse_text(src: str) -> List[Any]:
-    """Parse *src* (one or more statements) into a list of op-dicts."""
+    """Parse *src* (one or more statements) into a list of op-dicts.
+
+    The trailing ``"\n"`` appended below is significant: at column 0 it makes the
+    lexer emit the ``DEDENT`` tokens that unwind every open indentation level, so
+    a suite whose body reaches the end of the source (e.g. a nested ``if`` inside
+    a ``foreach``) still gets its closing ``DEDENT``.
+    """
     if not src.endswith("\n"):
         src += "\n"
     tokens = [t for t in _lexer.Lexer().tokenize(src) if t.type != "EOF"]

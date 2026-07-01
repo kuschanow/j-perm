@@ -58,10 +58,13 @@ from .handlers import (
     BreakHandler,
     ContinueMatcher,
     ContinueHandler,
+    ExitMatcher,
+    ExitHandler,
     # signals
     BreakSignal,
     ContinueSignal,
     ReturnSignal,
+    ExitSignal,
     RawValueSignal,
     # constructs
     raw_handler,
@@ -292,6 +295,8 @@ __all__ = [
     "BreakHandler",
     "ContinueMatcher",
     "ContinueHandler",
+    "ExitMatcher",
+    "ExitHandler",
     # function
     "DefMatcher",
     "CallMatcher",
@@ -306,6 +311,7 @@ __all__ = [
     "BreakSignal",
     "ContinueSignal",
     "ReturnSignal",
+    "ExitSignal",
     "RawValueSignal",
     # resolvers
     "PointerResolver",

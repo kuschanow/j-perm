@@ -427,7 +427,7 @@ class AsyncMiddleware(ABC):
 
 
 class ControlFlowSignal(Exception):
-    """Base class for control flow signals ($break, $continue, $return).
+    """Base class for control flow signals ($break, $continue, $return, $exit).
 
     These are NOT errors — they implement loop/function control flow.
     They inherit from ``Exception`` so that ``Pipeline.run`` can distinguish
@@ -1344,6 +1344,8 @@ class Engine:
         *source* is normalized (tuples → lists); *dest* is deep-copied.
         Returns a deep copy of the final ``dest``.
         """
+        from .handlers.signals import ExitSignal
+
         ctx = ExecutionContext(
             source=_tuples_to_lists(source),
             dest=copy.deepcopy(dest),
@@ -1351,6 +1353,8 @@ class Engine:
         )
         try:
             self.main_pipeline.run_compiled(compiled, ctx)
+        except ExitSignal:
+            pass  # $exit — clean, error-free early termination
         except Exception as e:
             if not isinstance(e, (PipelineSignal, ControlFlowSignal)):
                 lang_stack = getattr(e, '_j_perm_lang_stack', None)
@@ -1366,6 +1370,8 @@ class Engine:
 
     async def apply_compiled_async(self, compiled: CompiledSpec, *, source: Any, dest: Any) -> Any:
         """Async version of :meth:`apply_compiled`."""
+        from .handlers.signals import ExitSignal
+
         ctx = ExecutionContext(
             source=_tuples_to_lists(source),
             dest=copy.deepcopy(dest),
@@ -1373,6 +1379,8 @@ class Engine:
         )
         try:
             await self.main_pipeline.run_compiled_async(compiled, ctx)
+        except ExitSignal:
+            pass  # $exit — clean, error-free early termination
         except Exception as e:
             if not isinstance(e, (PipelineSignal, ControlFlowSignal)):
                 lang_stack = getattr(e, '_j_perm_lang_stack', None)
@@ -1413,6 +1421,8 @@ class Engine:
         On unhandled error, logs the language-level call stack at ``ERROR``
         level via the ``j_perm`` logger before re-raising.
         """
+        from .handlers.signals import ExitSignal
+
         ctx = ExecutionContext(
             source=_tuples_to_lists(source),
             dest=copy.deepcopy(dest),
@@ -1420,6 +1430,8 @@ class Engine:
         )
         try:
             self.main_pipeline.run(spec, ctx)
+        except ExitSignal:
+            pass  # $exit — clean, error-free early termination
         except Exception as e:
             if not isinstance(e, (PipelineSignal, ControlFlowSignal)):
                 lang_stack = getattr(e, '_j_perm_lang_stack', None)
@@ -1442,6 +1454,8 @@ class Engine:
         On unhandled error, logs the language-level call stack at ``ERROR``
         level via the ``j_perm`` logger before re-raising.
         """
+        from .handlers.signals import ExitSignal
+
         ctx = ExecutionContext(
             source=_tuples_to_lists(source),
             dest=copy.deepcopy(dest),
@@ -1449,6 +1463,8 @@ class Engine:
         )
         try:
             await self.main_pipeline.run_async(spec, ctx)
+        except ExitSignal:
+            pass  # $exit — clean, error-free early termination
         except Exception as e:
             if not isinstance(e, (PipelineSignal, ControlFlowSignal)):
                 lang_stack = getattr(e, '_j_perm_lang_stack', None)

@@ -593,3 +593,82 @@ class TestBuilders:
         sync = build_default_engine().apply(spec=spec, source={"items": [1, 2, 3]}, dest={})
         a = await build_default_async_engine().apply_async(spec=spec, source={"items": [1, 2, 3]}, dest={})
         assert sync == a == {"out": [1, 4, 9]}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# $exit — early, error-free termination (async path)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestAsyncExit:
+    async def test_exit_top_level(self, aeng):
+        assert await run(aeng, [{"/a": 1}, {"$exit": None}, {"/b": 2}]) == {"a": 1}
+
+    async def test_exit_from_foreach(self, aeng):
+        r = await run(aeng, [
+            {"op": "foreach", "in_value": [1, 2, 3, 4], "as": "it", "do": [
+                {"op": "if", "cond": {"$eq": [{"$ref": "&:/it"}, 3]}, "then": [{"$exit": None}]},
+                {"op": "set", "path": "/o/-", "value": {"$ref": "&:/it"}},
+            ]},
+            {"/after": True},
+        ], dest={"o": []})
+        assert r == {"o": [1, 2]}
+
+    async def test_exit_from_parallel_foreach(self, aeng):
+        # $exit propagates out of a parallel foreach and terminates the whole
+        # script; per-iteration deltas are never merged, so dest stays as-is.
+        r = await run(aeng, [
+            {"op": "foreach", "in_value": [1, 2, 3], "as": "it", "parallel": True,
+             "do": [{"op": "set", "path": "/o/-", "value": {"$ref": "&:/it"}}, {"$exit": None}]},
+            {"/after": True},
+        ], dest={"o": []})
+        assert r == {"o": []}
+
+    async def test_exit_from_while(self, aeng):
+        r = await run(aeng, [
+            {"/n": 0},
+            {"op": "while", "cond": {"$lt": [{"$ref": "@:/n"}, 10]}, "do": [
+                {"op": "if", "cond": {"$eq": [{"$ref": "@:/n"}, 2]}, "then": [{"$exit": None}]},
+                {"/n": {"$add": [{"$ref": "@:/n"}, 1]}},
+            ]},
+            {"/after": True},
+        ])
+        assert r == {"n": 2}
+
+    async def test_exit_from_if(self, aeng):
+        r = await run(aeng, [
+            {"/a": 1},
+            {"op": "if", "cond": True, "then": [{"$exit": None}]},
+            {"/after": True},
+        ])
+        assert r == {"a": 1}
+
+    async def test_exit_runs_finally_not_except(self, aeng):
+        r = await run(aeng, [
+            {"op": "try", "do": [{"/x": 1}, {"$exit": None}],
+             "except": [{"/caught": True}], "finally": [{"/cleaned": True}]},
+            {"/after": True},
+        ])
+        assert r == {"x": 1, "cleaned": True}
+
+    async def test_exit_from_function_bypasses_on_failure(self, aeng):
+        r = await run(aeng, [
+            {"$def": "f", "params": [], "context": "shared",
+             "body": [{"/in_func": True}, {"$exit": None}],
+             "on_failure": [{"/failed": True}]},
+            {"/before": 1},
+            {"$func": "f"},
+            {"/after": 2},
+        ])
+        assert r == {"before": 1, "in_func": True}
+
+    async def test_exit_compiled_async(self, aeng):
+        compiled = aeng.compile([
+            {"/a": 1},
+            {"op": "foreach", "in_value": [1, 2, 3], "as": "it", "do": [
+                {"op": "if", "cond": {"$eq": [{"$ref": "&:/it"}, 2]}, "then": [{"$exit": None}]},
+                {"/seen[]": "&:/it"},
+            ]},
+            {"/after": True},
+        ])
+        result = await compiled.apply_async(source={}, dest={})
+        assert result == {"a": 1, "seen": [1]}

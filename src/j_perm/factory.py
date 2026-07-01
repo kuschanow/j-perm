@@ -36,6 +36,7 @@ from .handlers.container_async import AsyncRecursiveDescentHandler
 from .handlers.flow import (
     BreakMatcher, BreakHandler,
     ContinueMatcher, ContinueHandler,
+    ExitMatcher, ExitHandler,
 )
 from .handlers.function import (
     DefMatcher, CallMatcher, DefHandler, CallHandler,
@@ -199,9 +200,9 @@ def _build_value_pipeline(
 def _register_main_ops(main_reg: ActionTypeRegistry, ops: Mapping[str, Any]) -> None:
     """Register all built-in operation nodes from a bundle of handler instances.
 
-    The *ops* bundle maps each op name to its handler; ``break`` / ``continue``
-    are always the (stateless) sync handlers.  Both the sync and async builders
-    call this with their respective bundles so the two engines stay equivalent.
+    The *ops* bundle maps each op name to its handler; ``break`` / ``continue`` /
+    ``exit`` are always the (stateless) sync handlers.  Both the sync and async
+    builders call this with their respective bundles so the two engines stay equivalent.
     """
     nodes: list[tuple[str, Any, Any]] = [
         ("set", OpMatcher("set"), ops["set"]),
@@ -222,6 +223,7 @@ def _register_main_ops(main_reg: ActionTypeRegistry, ops: Mapping[str, Any]) -> 
         ("return", ReturnMatcher(), ops["return"]),
         ("break", BreakMatcher(), BreakHandler()),
         ("continue", ContinueMatcher(), ContinueHandler()),
+        ("exit", ExitMatcher(), ExitHandler()),
     ]
     for name, matcher, handler in nodes:
         main_reg.register(ActionNode(name=name, priority=10, matcher=matcher, handler=handler))
