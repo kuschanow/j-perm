@@ -151,6 +151,23 @@ result = engine.apply(
 
 **Returns:** Deep copy of the final `dest` after all transformations.
 
+`apply` builds the execution context for you and swallows a `$exit`
+[`ExitSignal`](#exit--terminate-the-whole-script-early) as a clean early finish.
+If you need to bring your **own** context (e.g. to thread `metadata` / `temp`
+side channels), the engine offers two families:
+
+| Method | Owns context? | `$exit` behavior |
+|---|---|---|
+| `engine.apply(spec, *, source, dest)` | builds it | swallowed (clean finish) |
+| `engine.apply_to_context(spec, ctx)` | you provide | **propagates** `ExitSignal` (also the internal nested-body runner) |
+| `engine.run_script_in_context(spec, ctx)` | you provide | swallowed (clean finish) |
+
+Each has a compiled counterpart (`apply_compiled` / `apply_compiled_to_context` /
+`run_compiled_in_context`) and an `_async` twin. Use `run_script_in_context` when
+you drive a whole script through your own context and want `$exit` to stop
+cleanly; use `apply_to_context` only for nested/embedded runs where `$exit` must
+keep propagating outward (or catch `ExitSignal` yourself).
+
 ---
 
 ## Security and Limits
@@ -1590,6 +1607,33 @@ result = engine.apply(
 # → {"processed": [1], "aborted": True}
 ```
 
+**Embedding note.** `$exit` is swallowed only at the top-level entry points —
+`apply` / `apply_async` / `apply_compiled` / `apply_compiled_async`. The
+lower-level `apply_to_context` / `apply_compiled_to_context` (and their `_async`
+twins) **propagate** the `ExitSignal` instead of catching it, because they double
+as the internal runner for nested bodies (`foreach`, `while`, `if`, `exec`,
+`try`, `$def`, `$eval`) — if they swallowed it, `$exit` inside a loop or function
+could not terminate the whole script. So if you drive a script through a context
+you built yourself and want `$exit` to mean "stop cleanly", use the entry-point
+twins `run_script_in_context` / `run_compiled_in_context` (and `_async`), which
+catch `ExitSignal` and return the document built so far. Real errors still
+propagate.
+
+```python
+from j_perm import ExecutionContext
+
+ctx = ExecutionContext(source=src, dest={}, engine=engine)
+result = engine.run_script_in_context(spec, ctx)   # $exit → clean finish
+
+# Equivalently, catch it yourself around apply_to_context:
+from j_perm import ExitSignal
+try:
+    engine.apply_to_context(spec, ctx)
+except ExitSignal:
+    pass                       # not an error; ctx.dest holds the result
+result = ctx.dest
+```
+
 #### Interaction with `try`
 
 Control flow signals propagate **through** `try` blocks — they are never caught by `except`.  The `finally` block still runs before the signal continues propagating.
@@ -2693,8 +2737,10 @@ Built-in compound handlers: `ForeachHandler`, `WhileHandler`, `IfHandler`, `TryH
 | `engine.compile(spec)` | Compile a spec. Returns `CompiledSpec` or `None`. |
 | `engine.apply_compiled(compiled, *, source, dest)` | Execute a compiled spec. |
 | `engine.apply_compiled_async(compiled, *, source, dest)` | Async version. |
-| `engine.apply_compiled_to_context(compiled, ctx)` | Run inside an existing context. |
+| `engine.apply_compiled_to_context(compiled, ctx)` | Run inside an existing context (propagates `$exit`). |
 | `engine.apply_compiled_to_context_async(compiled, ctx)` | Async version. |
+| `engine.run_compiled_in_context(compiled, ctx)` | Run inside an existing context, swallowing `$exit` (clean finish). |
+| `engine.run_compiled_in_context_async(compiled, ctx)` | Async version. |
 
 ---
 
@@ -2764,7 +2810,8 @@ asyncio.run(main())
 | Method | Description |
 |--------|-------------|
 | `engine.apply_async()` | Async version of `apply()` |
-| `engine.apply_to_context_async()` | Async version of `apply_to_context()` |
+| `engine.apply_to_context_async()` | Async version of `apply_to_context()` (propagates `$exit`) |
+| `engine.run_script_in_context_async()` | Async version of `run_script_in_context()` (swallows `$exit`) |
 | `engine.process_value_async()` | Async value stabilization |
 | `engine.run_pipeline_async()` | Run named pipeline asynchronously |
 | `pipeline.run_async()` | Async pipeline execution |
