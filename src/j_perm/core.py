@@ -1400,14 +1400,45 @@ class Engine:
         Runs ``main_pipeline.run_compiled(compiled, ctx)`` and returns a deep
         copy of the resulting ``ctx.dest``.  The caller is responsible for
         providing a properly initialised context.
+
+        Like :meth:`apply_to_context`, this **propagates** a ``$exit``
+        ``ExitSignal``; use :meth:`run_compiled_in_context` for an entry point
+        that treats ``$exit`` as a clean finish.
         """
         self.main_pipeline.run_compiled(compiled, ctx)
         return copy.deepcopy(ctx.dest)
 
     async def apply_compiled_to_context_async(self, compiled: CompiledSpec, ctx: 'ExecutionContext') -> Any:
-        """Async version of :meth:`apply_compiled_to_context`."""
+        """Async version of :meth:`apply_compiled_to_context`.
+
+        Also propagates ``$exit``; use :meth:`run_compiled_in_context_async` for
+        an entry point that treats ``$exit`` as a clean finish.
+        """
         await self.main_pipeline.run_compiled_async(compiled, ctx)
         return copy.deepcopy(ctx.dest)
+
+    def run_compiled_in_context(self, compiled: CompiledSpec, ctx: 'ExecutionContext') -> Any:
+        """Run a compiled script in a caller-provided context (entry-point twin
+        of :meth:`apply_compiled_to_context`).
+
+        Identical to :meth:`apply_compiled_to_context` except that a ``$exit``
+        ``ExitSignal`` is treated as a clean early finish (swallowed, result
+        returned).  Real errors still propagate.  Returns a deep copy of
+        ``ctx.dest``.
+        """
+        from .handlers.signals import ExitSignal
+        try:
+            return self.apply_compiled_to_context(compiled, ctx)
+        except ExitSignal:
+            return copy.deepcopy(ctx.dest)  # $exit — clean, error-free finish
+
+    async def run_compiled_in_context_async(self, compiled: CompiledSpec, ctx: 'ExecutionContext') -> Any:
+        """Async version of :meth:`run_compiled_in_context`."""
+        from .handlers.signals import ExitSignal
+        try:
+            return await self.apply_compiled_to_context_async(compiled, ctx)
+        except ExitSignal:
+            return copy.deepcopy(ctx.dest)  # $exit — clean, error-free finish
 
     # -- public API ---------------------------------------------------------
 
@@ -1482,15 +1513,57 @@ class Engine:
         """Like ``apply``, but takes a pre-constructed context and mutates it in-place.
 
         The caller is responsible for normalizing the source and deep-copying
-        the dest if necessary.  Returns None; the result lives in ``ctx.dest``.
+        the dest if necessary.  Returns a deep copy of ``ctx.dest``.
+
+        This is also the internal runner for nested bodies, so it **propagates**
+        a ``$exit`` ``ExitSignal`` rather than swallowing it.  If you use this as
+        your *own* entry point, catch ``ExitSignal`` yourself or call
+        :meth:`run_script_in_context`, which does exactly that.
         """
         self.main_pipeline.run(spec, ctx)
         return copy.deepcopy(ctx.dest)
 
     async def apply_to_context_async(self, spec: Any, ctx: ExecutionContext) -> Any:
-        """Async version of apply_to_context()."""
+        """Async version of apply_to_context().
+
+        Also propagates ``$exit``; use :meth:`run_script_in_context_async` if you
+        need an entry point that treats ``$exit`` as a clean finish.
+        """
         await self.main_pipeline.run_async(spec, ctx)
         return copy.deepcopy(ctx.dest)
+
+    def run_script_in_context(self, spec: Any, ctx: ExecutionContext) -> Any:
+        """Run a whole script in a caller-provided context (entry-point twin of
+        :meth:`apply_to_context`).
+
+        Identical to :meth:`apply_to_context` except that a ``$exit``
+        ``ExitSignal`` is treated as a **clean early finish** — it is swallowed
+        and the document built so far is returned, exactly as :meth:`apply`
+        does at the top level.  Real errors still propagate unchanged.
+
+        Use this (rather than :meth:`apply_to_context`) when you drive an entire
+        script through a context you built yourself (e.g. to thread ``metadata``
+        / ``temp`` side channels) and want ``$exit`` to mean "stop, keep the
+        result" instead of surfacing as an exception::
+
+            ctx = ExecutionContext(source=src, dest={}, engine=engine)
+            result = engine.run_script_in_context(spec, ctx)  # $exit → clean
+
+        Returns a deep copy of ``ctx.dest``.
+        """
+        from .handlers.signals import ExitSignal
+        try:
+            return self.apply_to_context(spec, ctx)
+        except ExitSignal:
+            return copy.deepcopy(ctx.dest)  # $exit — clean, error-free finish
+
+    async def run_script_in_context_async(self, spec: Any, ctx: ExecutionContext) -> Any:
+        """Async version of :meth:`run_script_in_context`."""
+        from .handlers.signals import ExitSignal
+        try:
+            return await self.apply_to_context_async(spec, ctx)
+        except ExitSignal:
+            return copy.deepcopy(ctx.dest)  # $exit — clean, error-free finish
 
     def run_pipeline(self, name: str, spec: Any, ctx: ExecutionContext) -> ExecutionContext:
         """Run a named pipeline over the given context, as-is.

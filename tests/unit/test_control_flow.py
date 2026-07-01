@@ -1031,3 +1031,86 @@ class TestExit:
         ctx = ExecutionContext(source={}, dest={}, engine=engine)
         with pytest.raises(ExitSignal):
             engine.apply_to_context([{"/a": 1}, {"$exit": None}], ctx)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# run_script_in_context / run_compiled_in_context — entry points that own a ctx
+# and treat $exit as a clean finish (for embedders that bring their own context)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestRunInContext:
+
+    def _ctx(self, engine, dest=None):
+        from j_perm import ExecutionContext
+        return ExecutionContext(source={}, dest=dest if dest is not None else {}, engine=engine)
+
+    def test_run_script_in_context_swallows_exit(self):
+        engine = build_default_engine()
+        ctx = self._ctx(engine)
+        result = engine.run_script_in_context([{"/a": 1}, {"$exit": None}, {"/b": 2}], ctx)
+        assert result == {"a": 1}
+        assert ctx.dest == {"a": 1}
+
+    def test_run_script_in_context_normal_completion(self):
+        engine = build_default_engine()
+        ctx = self._ctx(engine)
+        result = engine.run_script_in_context([{"/a": 1}, {"/b": 2}], ctx)
+        assert result == {"a": 1, "b": 2}
+
+    def test_run_script_in_context_real_error_propagates(self):
+        engine = build_default_engine()
+        ctx = self._ctx(engine)
+        with pytest.raises(ZeroDivisionError):
+            engine.run_script_in_context([{"/x": {"$div": [1, 0]}}], ctx)
+
+    def test_run_compiled_in_context_swallows_exit(self):
+        engine = build_default_engine()
+        compiled = engine.compile([{"/a": 1}, {"$exit": None}, {"/b": 2}])
+        ctx = self._ctx(engine)
+        assert engine.run_compiled_in_context(compiled, ctx) == {"a": 1}
+
+    def test_run_compiled_in_context_normal_completion(self):
+        engine = build_default_engine()
+        compiled = engine.compile([{"/a": 1}, {"/b": 2}])
+        ctx = self._ctx(engine)
+        assert engine.run_compiled_in_context(compiled, ctx) == {"a": 1, "b": 2}
+
+
+class TestRunInContextAsync:
+
+    def _ctx(self, engine):
+        from j_perm import ExecutionContext
+        return ExecutionContext(source={}, dest={}, engine=engine)
+
+    def _run(self, coro):
+        import asyncio
+        return asyncio.new_event_loop().run_until_complete(coro)
+
+    def test_run_script_in_context_async_swallows_exit(self):
+        from j_perm import build_default_async_engine
+        engine = build_default_async_engine()
+        ctx = self._ctx(engine)
+        result = self._run(engine.run_script_in_context_async(
+            [{"/a": 1}, {"$exit": None}, {"/b": 2}], ctx))
+        assert result == {"a": 1}
+
+    def test_run_script_in_context_async_normal_completion(self):
+        from j_perm import build_default_async_engine
+        engine = build_default_async_engine()
+        ctx = self._ctx(engine)
+        result = self._run(engine.run_script_in_context_async([{"/a": 1}, {"/b": 2}], ctx))
+        assert result == {"a": 1, "b": 2}
+
+    def test_run_compiled_in_context_async_swallows_exit(self):
+        from j_perm import build_default_async_engine
+        engine = build_default_async_engine()
+        compiled = engine.compile([{"/a": 1}, {"$exit": None}, {"/b": 2}])
+        ctx = self._ctx(engine)
+        assert self._run(engine.run_compiled_in_context_async(compiled, ctx)) == {"a": 1}
+
+    def test_run_compiled_in_context_async_normal_completion(self):
+        from j_perm import build_default_async_engine
+        engine = build_default_async_engine()
+        compiled = engine.compile([{"/a": 1}, {"/b": 2}])
+        ctx = self._ctx(engine)
+        assert self._run(engine.run_compiled_in_context_async(compiled, ctx)) == {"a": 1, "b": 2}
