@@ -32,7 +32,7 @@ from .ops import (
     UpdateHandler, DistinctHandler, AssertHandler, TryHandler,
     DeserializeHandler, _parse_format, _DESERIALIZE_FORMATS,
 )
-from .signals import BreakSignal, ContinueSignal, ReturnSignal
+from .signals import BreakSignal, ContinueSignal, ReturnSignal, ExitSignal
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -143,6 +143,11 @@ class AsyncForeachHandler(ForeachHandler, AsyncActionHandler):
                 except BreakSignal:
                     ctx.dest = foreach_ctx.dest
                     break
+        except ExitSignal:
+            # $exit ends the whole script — keep the dest built so far
+            # (including changes made in this iteration) and propagate.
+            ctx.dest = foreach_ctx.dest
+            raise
         except ReturnSignal:
             raise  # Propagate without rollback
         except Exception:
@@ -182,7 +187,7 @@ class AsyncForeachHandler(ForeachHandler, AsyncActionHandler):
             raise ValueError(
                 "$break/$continue is not supported in parallel foreach"
             ) from exc
-        except ReturnSignal:
+        except (ReturnSignal, ExitSignal):
             raise
         except Exception:
             ctx.dest = snapshot
@@ -254,7 +259,7 @@ class AsyncWhileHandler(WhileHandler, AsyncActionHandler):
 
                 do_while = False
                 iteration += 1
-        except ReturnSignal:
+        except (ReturnSignal, ExitSignal):
             raise
         except Exception:
             ctx.dest = snapshot
@@ -310,7 +315,7 @@ class AsyncIfHandler(IfHandler, AsyncActionHandler):
             if compiled_branch is not None:
                 return await compiled_branch.run_async(ctx)
             return await ctx.engine.apply_to_context_async(actions, ctx)
-        except (BreakSignal, ContinueSignal, ReturnSignal):
+        except (BreakSignal, ContinueSignal, ReturnSignal, ExitSignal):
             raise
         except Exception:
             ctx.dest = snapshot
@@ -474,7 +479,7 @@ class AsyncTryHandler(TryHandler, AsyncActionHandler):
 
         try:
             await self._run_body_async(do_actions, compiled_do, ctx)
-        except (BreakSignal, ContinueSignal, ReturnSignal):
+        except (BreakSignal, ContinueSignal, ReturnSignal, ExitSignal):
             if finally_actions is not None:
                 try:
                     await self._run_body_async(finally_actions, compiled_finally, ctx)

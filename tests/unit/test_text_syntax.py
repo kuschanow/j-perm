@@ -77,6 +77,50 @@ def test_if_elif_else():
     assert inner["else"] == [{"op": "set", "path": "/a", "value": 3}]
 
 
+def test_block_dedent_then_sibling():
+    """A nested block suite may dedent back and be followed by a sibling stmt."""
+    d = one('if $(/x):\n    if $(/y):\n        /a = 1\n    /b = 2')
+    assert d["op"] == "if"
+    assert d["then"] == [
+        {"op": "if", "cond": {"$ref": "/y"}, "then": [{"op": "set", "path": "/a", "value": 1}]},
+        {"op": "set", "path": "/b", "value": 2},
+    ]
+
+
+def test_if_else_block_form():
+    """elif/else on their own dedented lines (block form, no separator token)."""
+    src = ('if $(/x) == 1:\n    /a = 1\n'
+           'elif $(/x) == 2:\n    /a = 2\n'
+           'else:\n    /a = 3')
+    d = one(src)
+    inner = d["else"][0]
+    assert inner["op"] == "if"
+    assert inner["cond"] == {"$eq": [{"$ref": "/x"}, 2]}
+    assert inner["else"] == [{"op": "set", "path": "/a", "value": 3}]
+
+
+def test_trailing_dedents_flushed_at_eof():
+    """A program ending while still indented parses (missing DEDENTs are added)."""
+    d = one('if $(/x):\n    /a = 1')
+    assert d == {"op": "if", "cond": {"$ref": "/x"},
+                 "then": [{"op": "set", "path": "/a", "value": 1}]}
+    # two open levels at EOF
+    d2 = one('foreach it in /xs:\n    if $(&:/it):\n        /o[] = $(&:/it)')
+    assert d2["op"] == "foreach"
+    assert d2["do"][0]["op"] == "if"
+
+
+def test_engine_nested_indentation():
+    """End-to-end: nested indented blocks execute correctly through the engine."""
+    eng = build_default_engine()
+    prog = ('/out = []\n'
+            'foreach x in [1, 2, 3]:\n'
+            '    if $(&:/x) == 2:\n'
+            '        /hit = true\n'
+            '    /out[] = $(&:/x)')
+    assert eng.apply(prog, source={}, dest={}) == {"out": [1, 2, 3], "hit": True}
+
+
 def test_foreach_in_pointer():
     d = one('foreach it in /xs:\n    /o[] = $(&:/it)')
     assert d == {"op": "foreach", "as": "it", "in": "/xs",
@@ -147,6 +191,10 @@ def test_raise():
 def test_break_continue():
     assert one('break') == {"$break": None}
     assert one('continue') == {"$continue": None}
+
+
+def test_exit():
+    assert one('exit') == {"$exit": None}
 
 
 def test_exec_from():
@@ -364,6 +412,14 @@ def test_engine_block_and_func():
     prog = ('def greet(name):\n    /msg = "Hi ${&:/name}"\n    return $(@:/msg)\n'
             '/r = greet("Bob")')
     assert eng.apply(prog, source={}, dest={}) == {"r": "Hi Bob"}
+
+
+def test_engine_exit():
+    eng = build_default_engine()
+    prog = ('/a = 1\n'
+            'foreach x in [1, 2, 3, 4] { if $(&:/x) == 3 { /aborted = true; exit }; /seen[] = $(&:/x) }\n'
+            '/after = true')
+    assert eng.apply(prog, source={}, dest={}) == {"a": 1, "seen": [1, 2], "aborted": True}
 
 
 def test_compile_mixed():

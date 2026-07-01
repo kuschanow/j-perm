@@ -9,6 +9,8 @@ stmts -> stmt seps_opt
 stmts -> stmts stmt seps_opt
 seps_opt ->
 seps_opt -> seps_opt sep
+seps -> sep
+seps -> seps sep
 sep -> NEWLINE
 sep -> ';'
 
@@ -26,6 +28,7 @@ stmt -> returnst
 stmt -> raisest
 stmt -> breakst
 stmt -> continuest
+stmt -> exitst
 stmt -> execst
 stmt -> opst
 stmt -> callstmt
@@ -48,9 +51,11 @@ assertst -> 'assert' POINTER '==' expr
 
 ifst -> 'if' expr suite elifs else_opt
 elifs ->
-elifs -> elifs seps_opt 'elif' expr suite
+elifs -> elifs 'elif' expr suite
+elifs -> elifs seps 'elif' expr suite
 else_opt ->
-else_opt -> seps_opt 'else' suite
+else_opt -> 'else' suite
+else_opt -> seps 'else' suite
 
 foreachst -> 'foreach' IDENT 'in' expr suite
 foreachst -> 'foreach' IDENT 'in' expr 'default' expr suite
@@ -79,6 +84,7 @@ returnst -> 'return' expr
 raisest -> 'raise' expr
 breakst -> 'break'
 continuest -> 'continue'
+exitst -> 'exit'
 execst -> 'exec' POINTER
 execst -> 'exec' POINTER 'merge'
 execst -> 'exec' suite

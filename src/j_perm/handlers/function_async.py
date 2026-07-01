@@ -15,7 +15,7 @@ from typing import Any
 
 from ..core import AsyncActionHandler, CompiledSpec, ExecutionContext
 from .function import DefHandler, CallHandler, RaiseHandler, ReturnHandler, JPermError
-from .signals import ReturnSignal
+from .signals import ReturnSignal, ExitSignal
 
 
 class AsyncDefHandler(DefHandler, AsyncActionHandler):
@@ -62,6 +62,8 @@ class AsyncDefHandler(DefHandler, AsyncActionHandler):
                 return result
             except ReturnSignal as e:
                 return e.value
+            except ExitSignal:
+                raise  # $exit unwinds the whole script — bypass on_failure
             except Exception as e:
                 if on_failure is not None:
                     call_ctx = ctx.metadata.get('_current_call_ctx', ctx)

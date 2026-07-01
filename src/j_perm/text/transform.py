@@ -389,8 +389,8 @@ def _collect_elifs(node):
         if not ch:
             return
         rec(ch[0])
-        # elifs seps_opt 'elif' expr suite
-        pairs.append((xv(ch[3]), xsuite(ch[4])))
+        # elifs ['elif'|seps 'elif'] expr suite  — expr/suite are the last two children
+        pairs.append((xv(ch[-2]), xsuite(ch[-1])))
     rec(node)
     return pairs
 
@@ -399,8 +399,8 @@ def _else(node):
     ch = kids(node)
     if not ch:
         return None
-    # seps_opt 'else' suite
-    return xsuite(ch[2])
+    # ['else'|seps 'else'] suite  — suite is the last child
+    return xsuite(ch[-1])
 
 
 def _foreach(ch):
@@ -501,6 +501,7 @@ _STMT = {
     "ifst": _if, "foreachst": _foreach, "whilest": _while, "dowhilest": _dowhile,
     "tryst": _try, "defst": _def, "returnst": _return, "raisest": _raise,
     "breakst": lambda ch: {"$break": None}, "continuest": lambda ch: {"$continue": None},
+    "exitst": lambda ch: {"$exit": None},
     "execst": _exec, "opst": _op, "callstmt": _callstmt,
 }
 
