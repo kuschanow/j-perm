@@ -1841,8 +1841,29 @@ parse_text("/x = 1 + 2")   # → [{"op": "set", "path": "/x", "value": {"$add": 
 | `break` / `continue` | `{$break: null}` / `{$continue: null}` |
 | `exit` | `{$exit: null}` (terminate the whole script early) |
 | `exec /script [merge]` / `exec: …` | `{op: exec, from \| actions, merge?}` |
+| `/dst = serialize(SRC, key: v)` | `{op: serialize, path: /dst, from\|value: SRC, …}` |
+| `/dst = deserialize(SRC, key: v)` | `{op: deserialize, path: /dst, from\|value: SRC, …}` |
+| `/dst = encode(SRC, key: v)` | `{op: encode, path: /dst, from\|value: SRC, …}` |
+| `/dst = decode(SRC, key: v)` | `{op: decode, path: /dst, from\|value: SRC, …}` |
+| `/dst = hash(SRC, key: v)` | `{op: hash, path: /dst, from\|value: SRC, …}` |
 | `op "name"(key: v): …` | `{op: "name", key: v, do?: …}` (generic escape hatch) |
 | `name(args)` | `{$func: name, args}` (call as a step) |
+
+For the five `serialize` / `deserialize` / `encode` / `decode` / `hash` forms, the
+first positional argument is the source: a **bare pointer** (`/data`, `@:/x`) maps
+to `from`, any other value maps to `value`; remaining `key: v` arguments become the
+operation's options (`format` / `codec` / `algo` / `output` / `encoding` /
+`create` / `extend` / `default`). These five names are **reserved keywords** in the
+text syntax (like `raw`), so they cannot double as `$func` names there — use the
+`op "…"(…)` escape hatch if you need an operation by a dynamic name.
+
+```text
+/payload = serialize(/data, format: "json")
+/back    = deserialize(@:/payload, format: "json")
+/b64     = encode("hello", codec: "base64")
+/plain   = decode(@:/b64, codec: "base64")
+/sum     = hash(/data, algo: "sha256")
+```
 
 A trailing `on_failure: …` block on a `def` becomes `$def.on_failure`.
 
@@ -2399,6 +2420,206 @@ spec = {
 }
 result = engine.apply(spec, source={}, dest={})
 # → {"items": [1, 2, 3]}
+```
+
+---
+
+### `serialize`
+
+Render a value into a serialized string — the inverse of `deserialize`.
+
+```json
+{
+    "op": "serialize",
+    "from": "/data",
+    // OR: "value": <val> — inline value (mutually exclusive with "from")
+    "format": "json",
+    // Format: "json" (compact), "pretty_json" (indented), or "yaml"
+    "path": "/result",
+    // Destination pointer
+    "create": true,
+    // Auto-create intermediate nodes (default: true)
+    "extend": true,
+    // Extend list on append (default: true)
+    "default": "{}"
+    // Fallback value if source pointer fails or serialization fails
+}
+```
+
+Exactly one of `from` or `value` must be specified.
+
+| Format | Description |
+|--------|-------------|
+| `json` | Compact JSON (`ensure_ascii=False`, no extra whitespace) |
+| `pretty_json` | Indented JSON (`indent=2`) |
+| `yaml` | YAML document via `yaml.safe_dump` (`sort_keys=False`, `allow_unicode=True`) |
+
+The `from` pointer supports all context prefixes (`@:`, `&:`, `!:`, `_:`).
+
+**Example — value to compact JSON:**
+
+```python
+spec = {
+    "op": "serialize",
+    "value": {"name": "Alice", "age": 30},
+    "format": "json",
+    "path": "/payload",
+}
+
+result = engine.apply(spec, source={}, dest={})
+# → {"payload": '{"name":"Alice","age":30}'}
+```
+
+**Example — round-trip with `deserialize`:**
+
+```python
+spec = [
+    {"op": "serialize", "from": "/obj", "format": "yaml", "path": "/text"},
+    {"op": "deserialize", "from": "@:/text", "format": "yaml", "path": "/back"},
+]
+
+result = engine.apply(spec, source={"obj": {"a": 1, "b": [2, 3]}}, dest={})
+# → {"text": "a: 1\nb:\n- 2\n- 3\n", "back": {"a": 1, "b": [2, 3]}}
+```
+
+---
+
+### `encode` / `decode`
+
+Encode a text string through a base/URL codec, and decode it back. `encode` maps
+text → bytes (via `encoding`) → codec string; `decode` is the exact inverse.
+
+```json
+{
+    "op": "encode",
+    // OR "op": "decode"
+    "from": "/text",
+    // OR: "value": "..." — inline text (mutually exclusive with "from")
+    "codec": "base64",
+    // Codec (see table below)
+    "encoding": "utf-8",
+    // Text encoding applied before/after the codec (default: "utf-8")
+    "path": "/result",
+    // Destination pointer
+    "create": true,
+    "extend": true,
+    "default": ""
+    // Fallback value if source pointer fails or the codec fails
+}
+```
+
+Exactly one of `from` or `value` must be specified.
+
+| Codec | Description |
+|-------|-------------|
+| `base64` | Standard RFC 4648 Base64 |
+| `base64url` | URL-safe Base64 (`-_` instead of `+/`) |
+| `base32` | RFC 4648 Base32 |
+| `base16` | RFC 4648 Base16 (uppercase hex) |
+| `hex` | Lowercase hexadecimal |
+| `base85` | Base85 (RFC 1924 / git alphabet) |
+| `ascii85` | Ascii85 (Adobe alphabet) |
+| `url` | Percent-encoding (`urllib.parse.quote` / `unquote`) |
+
+The `from` pointer supports all context prefixes (`@:`, `&:`, `!:`, `_:`).
+
+**Example — encode to Base64:**
+
+```python
+spec = {
+    "op": "encode",
+    "value": "hello",
+    "codec": "base64",
+    "path": "/b64",
+}
+
+result = engine.apply(spec, source={}, dest={})
+# → {"b64": "aGVsbG8="}
+```
+
+**Example — decode a JWT-style Base64URL segment, then parse it:**
+
+```python
+spec = [
+    {"op": "decode", "from": "/segment", "codec": "base64url", "path": "/json"},
+    {"op": "deserialize", "from": "@:/json", "format": "json", "path": "/claims"},
+]
+
+result = engine.apply(
+    spec,
+    source={"segment": "eyJzdWIiOiAiNDIifQ=="},
+    dest={},
+)
+# → {"json": '{"sub": "42"}', "claims": {"sub": "42"}}
+```
+
+---
+
+### `hash`
+
+Compute a deterministic digest of a value — for checksums or content-derived ids.
+
+```json
+{
+    "op": "hash",
+    "from": "/obj",
+    // OR: "value": <any> — inline value (mutually exclusive with "from")
+    "algo": "sha256",
+    // Digest algorithm (see table below)
+    "output": "hex",
+    // Digest encoding: "hex", "base64", or "base64url"
+    "encoding": "utf-8",
+    // Text encoding for string / canonical inputs (default: "utf-8")
+    "path": "/checksum",
+    // Destination pointer
+    "create": true,
+    "extend": true,
+    "default": null
+    // Fallback value if source pointer fails
+}
+```
+
+Exactly one of `from` or `value` must be specified. A **string** input is hashed
+as its `encoding` bytes; **any other value** is first canonically serialized
+(`json.dumps(value, sort_keys=True, separators=(",", ":"))`) so that equal objects
+produce equal digests regardless of key order.
+
+| Algorithm | Notes |
+|-----------|-------|
+| `sha256` | Default |
+| `sha512` | |
+| `sha1` | Legacy — avoid for security |
+| `md5` | Legacy — avoid for security |
+| `sha3_256`, `sha3_512` | SHA-3 family |
+| `blake2b`, `blake2s` | BLAKE2 family |
+
+The `from` pointer supports all context prefixes (`@:`, `&:`, `!:`, `_:`).
+
+**Example — hash of an object (canonical, key-order independent):**
+
+```python
+spec = {
+    "op": "hash",
+    "from": "/user",
+    "algo": "sha256",
+    "path": "/user_id",
+}
+
+result = engine.apply(spec, source={"user": {"name": "Alice", "age": 30}}, dest={})
+# → {"user_id": "<64-hex-char sha256 of the canonical JSON>"}
+```
+
+**Example — verify a checksum with `assert`:**
+
+```python
+spec = [
+    {"op": "hash", "from": "/payload", "algo": "sha256", "path": "/actual"},
+    {"op": "assert", "path": "@:/actual", "equals": "${/expected_sha256}"},
+]
+
+# Raises AssertionError if the payload's digest does not match the expected one.
+# (`@:/actual` reads the just-computed digest from dest; `${/expected_sha256}`
+#  pulls the expected value from source.)
 ```
 
 ---

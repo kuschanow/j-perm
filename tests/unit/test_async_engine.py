@@ -131,6 +131,77 @@ class TestAsyncLeafOps:
         with pytest.raises(Exception):
             await run(aeng, {"op": "deserialize", "from": "/missing", "path": "/out"})
 
+    async def test_serialize(self, aeng):
+        r = await run(aeng, {"op": "serialize", "value": {"a": 1}, "format": "json", "path": "/out"})
+        assert r == {"out": '{"a":1}'}
+        r2 = await run(aeng, {"op": "serialize", "from": "/obj", "format": "yaml", "path": "/out"},
+                       source={"obj": {"a": 1}})
+        assert r2 == {"out": "a: 1\n"}
+        r3 = await run(aeng, {"op": "serialize", "from": "/missing", "path": "/out", "default": "D"})
+        assert r3 == {"out": "D"}
+        r4 = await run(aeng, {"op": "serialize", "value": {"1", "2"}, "format": "json",
+                              "path": "/out", "default": "err"})
+        assert r4 == {"out": "err"}
+        with pytest.raises(ValueError):
+            await run(aeng, {"op": "serialize", "value": {"1", "2"}, "format": "json", "path": "/out"})
+        with pytest.raises(ValueError):
+            await run(aeng, {"op": "serialize", "value": 1, "from": "/y", "path": "/out"})
+        with pytest.raises(ValueError):
+            await run(aeng, {"op": "serialize", "path": "/out"})
+        with pytest.raises(ValueError):
+            await run(aeng, {"op": "serialize", "value": 1, "format": "xml", "path": "/out"})
+        with pytest.raises(Exception):
+            await run(aeng, {"op": "serialize", "from": "/missing", "path": "/out"})
+
+    async def test_encode_decode(self, aeng):
+        enc = await run(aeng, {"op": "encode", "value": "hello", "codec": "base64", "path": "/out"})
+        assert enc == {"out": "aGVsbG8="}
+        dec = await run(aeng, {"op": "decode", "from": "/e", "codec": "base64", "path": "/out"},
+                        source={"e": "aGVsbG8="})
+        assert dec == {"out": "hello"}
+        r3 = await run(aeng, {"op": "encode", "from": "/missing", "path": "/out", "default": "D"})
+        assert r3 == {"out": "D"}
+        r4 = await run(aeng, {"op": "decode", "value": "!!!", "codec": "base64",
+                              "path": "/out", "default": "D"})
+        assert r4 == {"out": "D"}
+        with pytest.raises(ValueError, match="failed to decode as 'base64'"):
+            await run(aeng, {"op": "decode", "value": "!!!", "codec": "base64", "path": "/out"})
+        with pytest.raises(ValueError, match="failed to encode as 'base64'"):
+            await run(aeng, {"op": "encode", "value": "мир", "codec": "base64",
+                             "encoding": "ascii", "path": "/out"})
+        with pytest.raises(ValueError, match="unknown codec"):
+            await run(aeng, {"op": "encode", "value": "x", "codec": "base9999", "path": "/out"})
+        with pytest.raises(ValueError, match="requires either"):
+            await run(aeng, {"op": "encode", "path": "/out"})
+        with pytest.raises(ValueError, match="cannot have both"):
+            await run(aeng, {"op": "encode", "from": "/t", "value": "x", "path": "/out"},
+                      source={"t": "x"})
+        with pytest.raises(Exception):
+            await run(aeng, {"op": "encode", "from": "/missing", "path": "/out"})
+
+    async def test_hash(self, aeng):
+        import hashlib
+        r = await run(aeng, {"op": "hash", "value": "abc", "path": "/out"})
+        assert r == {"out": hashlib.sha256(b"abc").hexdigest()}
+        r2 = await run(aeng, {"op": "hash", "from": "/d", "algo": "sha512", "path": "/out"},
+                       source={"d": "abc"})
+        assert r2 == {"out": hashlib.sha512(b"abc").hexdigest()}
+        r3 = await run(aeng, {"op": "hash", "value": {"b": 2, "a": 1}, "output": "base64url", "path": "/out"})
+        r4 = await run(aeng, {"op": "hash", "value": {"a": 1, "b": 2}, "output": "base64url", "path": "/out"})
+        assert r3 == r4
+        r5 = await run(aeng, {"op": "hash", "from": "/missing", "path": "/out", "default": "none"})
+        assert r5 == {"out": "none"}
+        with pytest.raises(ValueError, match="unknown algo"):
+            await run(aeng, {"op": "hash", "value": "x", "algo": "sha999", "path": "/out"})
+        with pytest.raises(ValueError, match="unknown output"):
+            await run(aeng, {"op": "hash", "value": "x", "output": "octal", "path": "/out"})
+        with pytest.raises(ValueError, match="requires either"):
+            await run(aeng, {"op": "hash", "path": "/out"})
+        with pytest.raises(ValueError, match="cannot have both"):
+            await run(aeng, {"op": "hash", "from": "/d", "value": "x", "path": "/out"}, source={"d": "x"})
+        with pytest.raises(Exception):
+            await run(aeng, {"op": "hash", "from": "/missing", "path": "/out"})
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # foreach

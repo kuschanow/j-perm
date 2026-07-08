@@ -1,5 +1,8 @@
 """Tests for all operation handlers."""
 
+import base64
+import hashlib
+
 import pytest
 from j_perm import build_default_engine
 
@@ -1181,4 +1184,424 @@ class TestDeserializeOperation:
         )
 
         assert result == {"a": {"b": {"parsed": {"v": 1}}}}
+
+
+class TestSerializeOperation:
+    """Test 'serialize' operation."""
+
+    def test_serialize_json_compact(self):
+        engine = build_default_engine()
+        result = engine.apply(
+            {"op": "serialize", "value": {"b": 1, "a": 2}, "format": "json", "path": "/s"},
+            source={}, dest={},
+        )
+        assert result == {"s": '{"b":1,"a":2}'}
+
+    def test_serialize_from_pointer(self):
+        engine = build_default_engine()
+        result = engine.apply(
+            {"op": "serialize", "from": "/data", "format": "json", "path": "/s"},
+            source={"data": [1, 2, 3]}, dest={},
+        )
+        assert result == {"s": "[1,2,3]"}
+
+    def test_serialize_pretty_json(self):
+        engine = build_default_engine()
+        result = engine.apply(
+            {"op": "serialize", "value": {"k": "v"}, "format": "pretty_json", "path": "/s"},
+            source={}, dest={},
+        )
+        assert result == {"s": '{\n  "k": "v"\n}'}
+
+    def test_serialize_yaml(self):
+        engine = build_default_engine()
+        result = engine.apply(
+            {"op": "serialize", "value": {"a": 1}, "format": "yaml", "path": "/s"},
+            source={}, dest={},
+        )
+        assert result == {"s": "a: 1\n"}
+
+    def test_serialize_default_format_is_json(self):
+        engine = build_default_engine()
+        result = engine.apply(
+            {"op": "serialize", "value": {"x": 1}, "path": "/s"},
+            source={}, dest={},
+        )
+        assert result == {"s": '{"x":1}'}
+
+    def test_serialize_unicode_not_escaped(self):
+        engine = build_default_engine()
+        result = engine.apply(
+            {"op": "serialize", "value": "мир", "format": "json", "path": "/s"},
+            source={}, dest={},
+        )
+        assert result == {"s": '"мир"'}
+
+    def test_serialize_default_on_missing_pointer(self):
+        engine = build_default_engine()
+        result = engine.apply(
+            {"op": "serialize", "from": "/missing", "path": "/s", "default": "fallback"},
+            source={}, dest={},
+        )
+        assert result == {"s": "fallback"}
+
+    def test_serialize_default_on_render_error(self):
+        """Non-JSON-serializable value falls back to default."""
+        engine = build_default_engine()
+        result = engine.apply(
+            {"op": "serialize", "value": {"1", "2"}, "format": "json",
+             "path": "/s", "default": "err"},
+            source={}, dest={},
+        )
+        assert result == {"s": "err"}
+
+    def test_serialize_raises_on_missing_pointer_without_default(self):
+        engine = build_default_engine()
+        with pytest.raises(Exception):
+            engine.apply(
+                {"op": "serialize", "from": "/missing", "path": "/s"},
+                source={}, dest={},
+            )
+
+    def test_serialize_raises_on_render_error_without_default(self):
+        engine = build_default_engine()
+        with pytest.raises(ValueError, match="failed to render as 'json'"):
+            engine.apply(
+                {"op": "serialize", "value": {"1", "2"}, "format": "json", "path": "/s"},
+                source={}, dest={},
+            )
+
+    def test_serialize_raises_on_unknown_format(self):
+        engine = build_default_engine()
+        with pytest.raises(ValueError, match="unknown format"):
+            engine.apply(
+                {"op": "serialize", "value": {}, "format": "toml", "path": "/s"},
+                source={}, dest={},
+            )
+
+    def test_serialize_requires_from_or_value(self):
+        engine = build_default_engine()
+        with pytest.raises(ValueError, match="requires either 'from' or 'value'"):
+            engine.apply({"op": "serialize", "path": "/s"}, source={}, dest={})
+
+    def test_serialize_cannot_have_both_from_and_value(self):
+        engine = build_default_engine()
+        with pytest.raises(ValueError, match="cannot have both 'from' and 'value'"):
+            engine.apply(
+                {"op": "serialize", "from": "/d", "value": 1, "path": "/s"},
+                source={"d": 1}, dest={},
+            )
+
+    def test_serialize_roundtrip_with_deserialize(self):
+        engine = build_default_engine()
+        result = engine.apply(
+            [
+                {"op": "serialize", "from": "/obj", "format": "yaml", "path": "/text"},
+                {"op": "deserialize", "from": "@:/text", "format": "yaml", "path": "/back"},
+            ],
+            source={"obj": {"a": 1, "b": [2, 3]}}, dest={},
+        )
+        assert result["back"] == {"a": 1, "b": [2, 3]}
+
+
+class TestEncodeDecodeOperation:
+    """Test 'encode' and 'decode' operations."""
+
+    ALL_CODECS = ["base64", "base64url", "base32", "base16", "hex",
+                  "base85", "ascii85", "url"]
+
+    @pytest.mark.parametrize("codec", ALL_CODECS)
+    def test_encode_decode_roundtrip(self, codec):
+        engine = build_default_engine()
+        text = "Привет, мир! /?+="
+        enc = engine.apply(
+            {"op": "encode", "value": text, "codec": codec, "path": "/o"},
+            source={}, dest={},
+        )["o"]
+        assert isinstance(enc, str)
+        dec = engine.apply(
+            {"op": "decode", "value": enc, "codec": codec, "path": "/o"},
+            source={}, dest={},
+        )["o"]
+        assert dec == text
+
+    def test_encode_base64_known_value(self):
+        engine = build_default_engine()
+        result = engine.apply(
+            {"op": "encode", "value": "hello", "codec": "base64", "path": "/o"},
+            source={}, dest={},
+        )
+        assert result == {"o": "aGVsbG8="}
+
+    def test_encode_default_codec_is_base64(self):
+        engine = build_default_engine()
+        result = engine.apply(
+            {"op": "encode", "value": "hello", "path": "/o"},
+            source={}, dest={},
+        )
+        assert result == {"o": "aGVsbG8="}
+
+    def test_encode_hex_is_lowercase(self):
+        engine = build_default_engine()
+        result = engine.apply(
+            {"op": "encode", "value": "AZ", "codec": "hex", "path": "/o"},
+            source={}, dest={},
+        )
+        assert result == {"o": "415a"}
+
+    def test_encode_base16_is_uppercase(self):
+        engine = build_default_engine()
+        result = engine.apply(
+            {"op": "encode", "value": "AZ", "codec": "base16", "path": "/o"},
+            source={}, dest={},
+        )
+        assert result == {"o": "415A"}
+
+    def test_encode_url_percent(self):
+        engine = build_default_engine()
+        result = engine.apply(
+            {"op": "encode", "value": "a b/c", "codec": "url", "path": "/o"},
+            source={}, dest={},
+        )
+        assert result == {"o": "a%20b%2Fc"}
+
+    def test_encode_custom_encoding(self):
+        engine = build_default_engine()
+        result = engine.apply(
+            {"op": "encode", "value": "é", "codec": "hex", "encoding": "latin-1", "path": "/o"},
+            source={}, dest={},
+        )
+        assert result == {"o": "e9"}
+
+    def test_encode_from_pointer(self):
+        engine = build_default_engine()
+        result = engine.apply(
+            {"op": "encode", "from": "/text", "codec": "base64", "path": "/o"},
+            source={"text": "hello"}, dest={},
+        )
+        assert result == {"o": "aGVsbG8="}
+
+    def test_decode_from_pointer(self):
+        engine = build_default_engine()
+        result = engine.apply(
+            {"op": "decode", "from": "/enc", "codec": "base64", "path": "/o"},
+            source={"enc": "aGVsbG8="}, dest={},
+        )
+        assert result == {"o": "hello"}
+
+    def test_encode_default_on_missing_pointer(self):
+        engine = build_default_engine()
+        result = engine.apply(
+            {"op": "encode", "from": "/missing", "path": "/o", "default": "FB"},
+            source={}, dest={},
+        )
+        assert result == {"o": "FB"}
+
+    def test_decode_default_on_decode_error(self):
+        engine = build_default_engine()
+        result = engine.apply(
+            {"op": "decode", "value": "!!!not base64!!!", "codec": "base64",
+             "path": "/o", "default": "FB"},
+            source={}, dest={},
+        )
+        assert result == {"o": "FB"}
+
+    def test_decode_raises_on_decode_error_without_default(self):
+        engine = build_default_engine()
+        with pytest.raises(ValueError, match="failed to decode as 'base64'"):
+            engine.apply(
+                {"op": "decode", "value": "!!!not base64!!!", "codec": "base64", "path": "/o"},
+                source={}, dest={},
+            )
+
+    def test_encode_raises_on_encode_error_without_default(self):
+        """A non-ascii-encodable char under a byte-limited encoding fails."""
+        engine = build_default_engine()
+        with pytest.raises(ValueError, match="failed to encode as 'base64'"):
+            engine.apply(
+                {"op": "encode", "value": "мир", "codec": "base64",
+                 "encoding": "ascii", "path": "/o"},
+                source={}, dest={},
+            )
+
+    def test_encode_raises_on_missing_pointer_without_default(self):
+        engine = build_default_engine()
+        with pytest.raises(Exception):
+            engine.apply(
+                {"op": "encode", "from": "/missing", "path": "/o"},
+                source={}, dest={},
+            )
+
+    def test_encode_raises_on_unknown_codec(self):
+        engine = build_default_engine()
+        with pytest.raises(ValueError, match="unknown codec"):
+            engine.apply(
+                {"op": "encode", "value": "x", "codec": "base9999", "path": "/o"},
+                source={}, dest={},
+            )
+
+    def test_decode_raises_on_unknown_codec(self):
+        engine = build_default_engine()
+        with pytest.raises(ValueError, match="unknown codec"):
+            engine.apply(
+                {"op": "decode", "value": "x", "codec": "base9999", "path": "/o"},
+                source={}, dest={},
+            )
+
+    def test_encode_requires_from_or_value(self):
+        engine = build_default_engine()
+        with pytest.raises(ValueError, match="requires either 'from' or 'value'"):
+            engine.apply({"op": "encode", "path": "/o"}, source={}, dest={})
+
+    def test_encode_cannot_have_both_from_and_value(self):
+        engine = build_default_engine()
+        with pytest.raises(ValueError, match="cannot have both 'from' and 'value'"):
+            engine.apply(
+                {"op": "encode", "from": "/t", "value": "x", "path": "/o"},
+                source={"t": "x"}, dest={},
+            )
+
+
+class TestHashOperation:
+    """Test 'hash' operation."""
+
+    def test_hash_string_sha256(self):
+        engine = build_default_engine()
+        result = engine.apply(
+            {"op": "hash", "value": "abc", "algo": "sha256", "path": "/h"},
+            source={}, dest={},
+        )
+        assert result == {"h": hashlib.sha256(b"abc").hexdigest()}
+
+    def test_hash_default_algo_is_sha256(self):
+        engine = build_default_engine()
+        result = engine.apply(
+            {"op": "hash", "value": "abc", "path": "/h"},
+            source={}, dest={},
+        )
+        assert result == {"h": hashlib.sha256(b"abc").hexdigest()}
+
+    @pytest.mark.parametrize("algo", [
+        "sha256", "sha512", "sha1", "md5", "sha3_256", "sha3_512", "blake2b", "blake2s",
+    ])
+    def test_hash_all_algos(self, algo):
+        engine = build_default_engine()
+        result = engine.apply(
+            {"op": "hash", "value": "data", "algo": algo, "path": "/h"},
+            source={}, dest={},
+        )
+        assert result == {"h": hashlib.new(algo, b"data").hexdigest()}
+
+    def test_hash_object_is_canonical(self):
+        """Equal objects hash equally regardless of key order."""
+        engine = build_default_engine()
+        h1 = engine.apply(
+            {"op": "hash", "value": {"a": 1, "b": 2}, "path": "/h"}, source={}, dest={},
+        )["h"]
+        h2 = engine.apply(
+            {"op": "hash", "value": {"b": 2, "a": 1}, "path": "/h"}, source={}, dest={},
+        )["h"]
+        assert h1 == h2
+        import json
+        expected = hashlib.sha256(
+            json.dumps({"a": 1, "b": 2}, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        assert h1 == expected
+
+    def test_hash_output_base64(self):
+        engine = build_default_engine()
+        result = engine.apply(
+            {"op": "hash", "value": "abc", "output": "base64", "path": "/h"},
+            source={}, dest={},
+        )
+        assert result == {"h": base64.b64encode(hashlib.sha256(b"abc").digest()).decode()}
+
+    def test_hash_output_base64url(self):
+        engine = build_default_engine()
+        result = engine.apply(
+            {"op": "hash", "value": "abc", "output": "base64url", "path": "/h"},
+            source={}, dest={},
+        )
+        assert result == {"h": base64.urlsafe_b64encode(hashlib.sha256(b"abc").digest()).decode()}
+
+    def test_hash_custom_encoding(self):
+        engine = build_default_engine()
+        result = engine.apply(
+            {"op": "hash", "value": "é", "encoding": "latin-1", "path": "/h"},
+            source={}, dest={},
+        )
+        assert result == {"h": hashlib.sha256("é".encode("latin-1")).hexdigest()}
+
+    def test_hash_from_pointer(self):
+        engine = build_default_engine()
+        result = engine.apply(
+            {"op": "hash", "from": "/data", "path": "/h"},
+            source={"data": "abc"}, dest={},
+        )
+        assert result == {"h": hashlib.sha256(b"abc").hexdigest()}
+
+    def test_hash_default_on_missing_pointer(self):
+        engine = build_default_engine()
+        result = engine.apply(
+            {"op": "hash", "from": "/missing", "path": "/h", "default": "none"},
+            source={}, dest={},
+        )
+        assert result == {"h": "none"}
+
+    def test_hash_raises_on_missing_pointer_without_default(self):
+        engine = build_default_engine()
+        with pytest.raises(Exception):
+            engine.apply({"op": "hash", "from": "/missing", "path": "/h"}, source={}, dest={})
+
+    def test_hash_raises_on_unknown_algo(self):
+        engine = build_default_engine()
+        with pytest.raises(ValueError, match="unknown algo"):
+            engine.apply(
+                {"op": "hash", "value": "x", "algo": "sha999", "path": "/h"},
+                source={}, dest={},
+            )
+
+    def test_hash_raises_on_unknown_output(self):
+        engine = build_default_engine()
+        with pytest.raises(ValueError, match="unknown output"):
+            engine.apply(
+                {"op": "hash", "value": "x", "output": "octal", "path": "/h"},
+                source={}, dest={},
+            )
+
+    def test_hash_requires_from_or_value(self):
+        engine = build_default_engine()
+        with pytest.raises(ValueError, match="requires either 'from' or 'value'"):
+            engine.apply({"op": "hash", "path": "/h"}, source={}, dest={})
+
+    def test_hash_cannot_have_both_from_and_value(self):
+        engine = build_default_engine()
+        with pytest.raises(ValueError, match="cannot have both 'from' and 'value'"):
+            engine.apply(
+                {"op": "hash", "from": "/d", "value": "x", "path": "/h"},
+                source={"d": "x"}, dest={},
+            )
+
+    def test_hash_then_assert_checksum(self):
+        engine = build_default_engine()
+        expected = hashlib.sha256(b"data").hexdigest()
+        result = engine.apply(
+            [
+                {"op": "hash", "from": "/payload", "algo": "sha256", "path": "/actual"},
+                {"op": "assert", "path": "@:/actual", "equals": "${/expected}"},
+            ],
+            source={"payload": "data", "expected": expected}, dest={},
+        )
+        assert result["actual"] == expected
+
+    def test_hash_then_assert_checksum_mismatch_raises(self):
+        engine = build_default_engine()
+        with pytest.raises(AssertionError):
+            engine.apply(
+                [
+                    {"op": "hash", "from": "/payload", "algo": "sha256", "path": "/actual"},
+                    {"op": "assert", "path": "@:/actual", "equals": "${/expected}"},
+                ],
+                source={"payload": "data", "expected": "wrong"}, dest={},
+            )
 

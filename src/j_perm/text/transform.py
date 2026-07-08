@@ -492,6 +492,21 @@ def _op(ch):
     return d
 
 
+def _opfn(ch):
+    # POINTER '=' opfn '(' args ')'  where opfn -> 'serialize'|'deserialize'|...
+    dst = tval(ch[0])
+    opname = tval(kids(ch[2])[0])
+    pos, nm = _args(ch[4])
+    d = {"op": opname, "path": dst, **nm}
+    if pos:
+        src = pos[0]
+        if _is_pointer_literal(src):
+            d["from"] = src
+        else:
+            d["value"] = src
+    return d
+
+
 def _callstmt(ch):
     return xv(ch[0])  # call -> {"$func":...}
 
@@ -502,7 +517,7 @@ _STMT = {
     "tryst": _try, "defst": _def, "returnst": _return, "raisest": _raise,
     "breakst": lambda ch: {"$break": None}, "continuest": lambda ch: {"$continue": None},
     "exitst": lambda ch: {"$exit": None},
-    "execst": _exec, "opst": _op, "callstmt": _callstmt,
+    "execst": _exec, "opst": _op, "opfnst": _opfn, "callstmt": _callstmt,
 }
 
 

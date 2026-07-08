@@ -136,6 +136,10 @@ from .handlers import (
     AssertHandler,
     TryHandler,
     DeserializeHandler,
+    SerializeHandler,
+    EncodeHandler,
+    DecodeHandler,
+    HashHandler,
     # function
     DefMatcher,
     CallMatcher,
@@ -290,6 +294,10 @@ __all__ = [
     "AssertHandler",
     "TryHandler",
     "DeserializeHandler",
+    "SerializeHandler",
+    "EncodeHandler",
+    "DecodeHandler",
+    "HashHandler",
     # flow control
     "BreakMatcher",
     "BreakHandler",

@@ -6,7 +6,7 @@ special    – special-construct dispatch (``$ref``, ``$eval``, ``$and``, ``$or`
 constructs – built-in special handlers (ref_handler, eval_handler, and_handler, or_handler, not_handler)
 container  – recursive descent into lists / dicts
 identity   – scalar pass-through (catch-all)
-ops        – all 13 built-in operation handlers
+ops        – all 17 built-in operation handlers
 function   – function definition, calling, and error raising
 """
 
@@ -56,7 +56,9 @@ from .ops import (
     UpdateHandler, DistinctHandler,
     AssertHandler,
     TryHandler,
-    DeserializeHandler,
+    DeserializeHandler, SerializeHandler,
+    EncodeHandler, DecodeHandler,
+    HashHandler,
 )
 from .special import SpecialFn, SpecialMatcher, SpecialResolveHandler
 from .template import TemplMatcher, TemplSubstHandler, template_unescape
@@ -139,6 +141,10 @@ __all__ = [
     "AssertHandler",
     "TryHandler",
     "DeserializeHandler",
+    "SerializeHandler",
+    "EncodeHandler",
+    "DecodeHandler",
+    "HashHandler",
     # flow control
     "BreakMatcher",
     "BreakHandler",
