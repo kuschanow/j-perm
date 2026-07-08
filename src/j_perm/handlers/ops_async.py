@@ -31,6 +31,9 @@ from .ops import (
     ForeachHandler, WhileHandler, IfHandler, ExecHandler,
     UpdateHandler, DistinctHandler, AssertHandler, TryHandler,
     DeserializeHandler, _parse_format, _DESERIALIZE_FORMATS,
+    SerializeHandler, _serialize_format, _SERIALIZE_FORMATS,
+    EncodeHandler, DecodeHandler, _CodecHandler, _CODECS,
+    HashHandler, _hash_digest, _hash_input_bytes, _HASH_ALGOS, _HASH_OUTPUTS,
 )
 from .signals import BreakSignal, ContinueSignal, ReturnSignal, ExitSignal
 
@@ -572,5 +575,200 @@ class AsyncDeserializeHandler(DeserializeHandler, AsyncActionHandler):
 
         return await self._set.execute(
             {"op": "set", "path": path, "value": parsed, "create": create, "extend": extend_list},
+            ctx,
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# serialize
+# ─────────────────────────────────────────────────────────────────────────────
+
+class AsyncSerializeHandler(SerializeHandler, AsyncActionHandler):
+    """Async ``op: serialize``."""
+
+    def __init__(self, set_handler: AsyncSetHandler | None = None) -> None:
+        self._set = set_handler or AsyncSetHandler()
+
+    async def execute(self, step: Any, ctx: ExecutionContext) -> Any:
+        has_from = "from" in step
+        has_value = "value" in step
+
+        if has_from and has_value:
+            raise ValueError("serialize cannot have both 'from' and 'value'")
+        if not has_from and not has_value:
+            raise ValueError("serialize requires either 'from' or 'value'")
+
+        fmt = await ctx.engine.process_value_async(step.get("format", "json"), ctx)
+        if fmt not in _SERIALIZE_FORMATS:
+            raise ValueError(
+                f"serialize: unknown format '{fmt}'. Supported: {', '.join(sorted(_SERIALIZE_FORMATS))}"
+            )
+
+        path = await ctx.engine.process_value_async(step["path"], ctx)
+        create = bool(await ctx.engine.process_value_async(step.get("create", True), ctx))
+        extend_list = bool(await ctx.engine.process_value_async(step.get("extend", True), ctx))
+
+        if has_from:
+            ptr = await ctx.engine.process_value_async(step["from"], ctx)
+            try:
+                value = ctx.engine.processor.get(ptr, ctx)
+            except Exception:
+                if "default" in step:
+                    return await self._write_default_async(step, ctx, path, create, extend_list)
+                raise
+        else:
+            value = await ctx.engine.process_value_async(step["value"], ctx)
+
+        try:
+            rendered = _serialize_format(fmt, value)
+        except Exception as exc:
+            if "default" in step:
+                return await self._write_default_async(step, ctx, path, create, extend_list)
+            raise ValueError(f"serialize: failed to render as '{fmt}': {exc}") from exc
+
+        return await self._set.execute(
+            {"op": "set", "path": path, "value": rendered, "create": create, "extend": extend_list},
+            ctx,
+        )
+
+    async def _write_default_async(self, step: Any, ctx: ExecutionContext, path: Any,
+                                   create: bool, extend_list: bool) -> Any:
+        fallback = await ctx.engine.process_value_async(step["default"], ctx)
+        return await self._set.execute(
+            {"op": "set", "path": path, "value": fallback, "create": create, "extend": extend_list},
+            ctx,
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# encode / decode
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _AsyncCodecHandler(_CodecHandler, AsyncActionHandler):
+    """Async twin of :class:`~j_perm.handlers.ops._CodecHandler` — awaits value
+    resolution, reuses the sync ``_op`` / ``_transform`` seams."""
+
+    def __init__(self, set_handler: AsyncSetHandler | None = None) -> None:
+        self._set = set_handler or AsyncSetHandler()
+
+    async def execute(self, step: Any, ctx: ExecutionContext) -> Any:
+        has_from = "from" in step
+        has_value = "value" in step
+
+        if has_from and has_value:
+            raise ValueError(f"{self._op} cannot have both 'from' and 'value'")
+        if not has_from and not has_value:
+            raise ValueError(f"{self._op} requires either 'from' or 'value'")
+
+        codec = await ctx.engine.process_value_async(step.get("codec", "base64"), ctx)
+        if codec not in _CODECS:
+            raise ValueError(
+                f"{self._op}: unknown codec '{codec}'. Supported: {', '.join(sorted(_CODECS))}"
+            )
+
+        encoding = await ctx.engine.process_value_async(step.get("encoding", "utf-8"), ctx)
+        path = await ctx.engine.process_value_async(step["path"], ctx)
+        create = bool(await ctx.engine.process_value_async(step.get("create", True), ctx))
+        extend_list = bool(await ctx.engine.process_value_async(step.get("extend", True), ctx))
+
+        if has_from:
+            ptr = await ctx.engine.process_value_async(step["from"], ctx)
+            try:
+                raw = ctx.engine.processor.get(ptr, ctx)
+            except Exception:
+                if "default" in step:
+                    return await self._write_default_async(step, ctx, path, create, extend_list)
+                raise
+        else:
+            raw = await ctx.engine.process_value_async(step["value"], ctx)
+
+        try:
+            result = self._transform(codec, raw, encoding)
+        except Exception as exc:
+            if "default" in step:
+                return await self._write_default_async(step, ctx, path, create, extend_list)
+            verb = "encode" if self._op == "encode" else "decode"
+            raise ValueError(f"{self._op}: failed to {verb} as '{codec}': {exc}") from exc
+
+        return await self._set.execute(
+            {"op": "set", "path": path, "value": result, "create": create, "extend": extend_list},
+            ctx,
+        )
+
+    async def _write_default_async(self, step: Any, ctx: ExecutionContext, path: Any,
+                                   create: bool, extend_list: bool) -> Any:
+        fallback = await ctx.engine.process_value_async(step["default"], ctx)
+        return await self._set.execute(
+            {"op": "set", "path": path, "value": fallback, "create": create, "extend": extend_list},
+            ctx,
+        )
+
+
+class AsyncEncodeHandler(EncodeHandler, _AsyncCodecHandler):
+    """Async ``op: encode`` — ``_op`` / ``_transform`` from :class:`EncodeHandler`,
+    async ``execute`` from :class:`_AsyncCodecHandler`."""
+
+
+class AsyncDecodeHandler(DecodeHandler, _AsyncCodecHandler):
+    """Async ``op: decode`` — ``_op`` / ``_transform`` from :class:`DecodeHandler`,
+    async ``execute`` from :class:`_AsyncCodecHandler`."""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# hash
+# ─────────────────────────────────────────────────────────────────────────────
+
+class AsyncHashHandler(HashHandler, AsyncActionHandler):
+    """Async ``op: hash``."""
+
+    def __init__(self, set_handler: AsyncSetHandler | None = None) -> None:
+        self._set = set_handler or AsyncSetHandler()
+
+    async def execute(self, step: Any, ctx: ExecutionContext) -> Any:
+        has_from = "from" in step
+        has_value = "value" in step
+
+        if has_from and has_value:
+            raise ValueError("hash cannot have both 'from' and 'value'")
+        if not has_from and not has_value:
+            raise ValueError("hash requires either 'from' or 'value'")
+
+        algo = await ctx.engine.process_value_async(step.get("algo", "sha256"), ctx)
+        if algo not in _HASH_ALGOS:
+            raise ValueError(
+                f"hash: unknown algo '{algo}'. Supported: {', '.join(sorted(_HASH_ALGOS))}"
+            )
+
+        output = await ctx.engine.process_value_async(step.get("output", "hex"), ctx)
+        if output not in _HASH_OUTPUTS:
+            raise ValueError(
+                f"hash: unknown output '{output}'. Supported: {', '.join(sorted(_HASH_OUTPUTS))}"
+            )
+
+        encoding = await ctx.engine.process_value_async(step.get("encoding", "utf-8"), ctx)
+        path = await ctx.engine.process_value_async(step["path"], ctx)
+        create = bool(await ctx.engine.process_value_async(step.get("create", True), ctx))
+        extend_list = bool(await ctx.engine.process_value_async(step.get("extend", True), ctx))
+
+        if has_from:
+            ptr = await ctx.engine.process_value_async(step["from"], ctx)
+            try:
+                value = ctx.engine.processor.get(ptr, ctx)
+            except Exception:
+                if "default" in step:
+                    fallback = await ctx.engine.process_value_async(step["default"], ctx)
+                    return await self._set.execute(
+                        {"op": "set", "path": path, "value": fallback,
+                         "create": create, "extend": extend_list},
+                        ctx,
+                    )
+                raise
+        else:
+            value = await ctx.engine.process_value_async(step["value"], ctx)
+
+        digest = _hash_digest(algo, output, _hash_input_bytes(value, encoding))
+
+        return await self._set.execute(
+            {"op": "set", "path": path, "value": digest, "create": create, "extend": extend_list},
             ctx,
         )

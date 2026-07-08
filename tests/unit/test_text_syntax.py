@@ -219,6 +219,52 @@ def test_op_generic_no_block():
     assert one('op "custom"(x: 1)') == {"op": "custom", "x": 1}
 
 
+def test_serialize_from_pointer():
+    assert one('/payload = serialize(/data, format: "json")') == {
+        "op": "serialize", "path": "/payload", "from": "/data", "format": "json"}
+
+
+def test_serialize_inline_value():
+    assert one('/s = serialize({"a": 1}, format: "yaml")') == {
+        "op": "serialize", "path": "/s", "value": {"a": 1}, "format": "yaml"}
+
+
+def test_deserialize_from_pointer():
+    assert one('/data = deserialize(/payload, format: "json")') == {
+        "op": "deserialize", "path": "/data", "from": "/payload", "format": "json"}
+
+
+def test_encode_from_pointer():
+    assert one('/b64 = encode(/text, codec: "base64")') == {
+        "op": "encode", "path": "/b64", "from": "/text", "codec": "base64"}
+
+
+def test_decode_from_pointer():
+    assert one('/text = decode(/b64, codec: "base64")') == {
+        "op": "decode", "path": "/text", "from": "/b64", "codec": "base64"}
+
+
+def test_hash_from_pointer():
+    assert one('/sum = hash(/obj, algo: "sha256", output: "hex")') == {
+        "op": "hash", "path": "/sum", "from": "/obj", "algo": "sha256", "output": "hex"}
+
+
+def test_hash_inline_string_value():
+    assert one('/h = hash("abc")') == {"op": "hash", "path": "/h", "value": "abc"}
+
+
+def test_opfn_explicit_named_from():
+    """No positional arg — named 'from'/'value' pass straight through."""
+    assert one('/o = encode(from: /t, codec: "hex")') == {
+        "op": "encode", "path": "/o", "from": "/t", "codec": "hex"}
+
+
+def test_opfn_context_prefix_source():
+    """A prefixed pointer source is routed to 'from'."""
+    assert one('/back = deserialize(@:/raw, format: "json")') == {
+        "op": "deserialize", "path": "/back", "from": "@:/raw", "format": "json"}
+
+
 def test_callstmt():
     assert one('f("x", 2)') == {"$func": "f", "args": ["x", 2]}
 

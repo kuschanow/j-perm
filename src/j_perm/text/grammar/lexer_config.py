@@ -95,6 +95,7 @@ LEXER_CONFIG = {
                     "try", "except", "finally", "def", "return", "raise",
                     "break", "continue", "exit", "exec", "and", "or", "not", "exists",
                     "true", "false", "null", "del", "assert", "op", "raw",
+                    "serialize", "deserialize", "encode", "decode", "hash",
                 ], "emit": "KW"},
 
                 # identifiers

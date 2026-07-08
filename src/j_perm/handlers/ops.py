@@ -3,21 +3,27 @@
 Each operation is implemented as an ``ActionHandler`` that accepts steps
 with ``{"op": "operation_name", ...}``.
 
-Exports all 13 operation handlers:
+Exports all 17 operation handlers:
 * SetHandler, CopyHandler
 * DeleteHandler
 * ForeachHandler, WhileHandler, IfHandler, ExecHandler
 * UpdateHandler, DistinctHandler
 * AssertHandler
 * TryHandler
-* DeserializeHandler
+* DeserializeHandler, SerializeHandler
+* EncodeHandler, DecodeHandler
+* HashHandler
 """
 
 from __future__ import annotations
 
+import base64 as _base64
+import binascii as _binascii
 import copy
+import hashlib as _hashlib
 import json as _json
 from typing import Any, Mapping
+from urllib.parse import quote as _url_quote, unquote as _url_unquote
 
 import yaml as _yaml
 
@@ -958,3 +964,361 @@ def _parse_format(fmt: str, raw: str) -> Any:
         return _json.loads(raw)
     # fmt == "yaml"
     return _yaml.safe_load(raw)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# serialize — render a value into a serialized string
+# ─────────────────────────────────────────────────────────────────────────────
+
+_SERIALIZE_FORMATS = frozenset({"json", "pretty_json", "yaml"})
+
+
+def _serialize_format(fmt: str, value: Any) -> str:
+    if fmt == "json":
+        return _json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    if fmt == "pretty_json":
+        return _json.dumps(value, ensure_ascii=False, indent=2)
+    # fmt == "yaml"
+    return _yaml.safe_dump(value, sort_keys=False, allow_unicode=True)
+
+
+class SerializeHandler(ActionHandler):
+    """``op: serialize`` — render a value into a serialized string.
+
+    Schema::
+
+        {"op": "serialize", "from": "/data",
+         "format": "json", "path": "/result",
+         "create": true, "extend": true, "default": <fallback>}
+
+    * ``from`` — source pointer to the value (supports all context prefixes)
+    * ``value`` — inline value (mutually exclusive with ``from``)
+    * ``format`` — one of ``"json"`` (compact), ``"pretty_json"`` (indented),
+      ``"yaml"``
+    * ``path`` — destination pointer
+    * ``create`` (default ``true``) — auto-create intermediate nodes
+    * ``extend`` (default ``true``) — extend list instead of wrap when appending
+    * ``default`` — fallback value if the source pointer fails or serialization fails
+
+    Inverse of :class:`DeserializeHandler`.
+    """
+
+    def __init__(self, set_handler: SetHandler | None = None) -> None:
+        self._set = set_handler or SetHandler()
+
+    def execute(self, step: Any, ctx: ExecutionContext) -> Any:
+        has_from = "from" in step
+        has_value = "value" in step
+
+        if has_from and has_value:
+            raise ValueError("serialize cannot have both 'from' and 'value'")
+        if not has_from and not has_value:
+            raise ValueError("serialize requires either 'from' or 'value'")
+
+        fmt = ctx.engine.process_value(step.get("format", "json"), ctx)
+        if fmt not in _SERIALIZE_FORMATS:
+            raise ValueError(
+                f"serialize: unknown format '{fmt}'. Supported: {', '.join(sorted(_SERIALIZE_FORMATS))}"
+            )
+
+        path = ctx.engine.process_value(step["path"], ctx)
+        create = bool(ctx.engine.process_value(step.get("create", True), ctx))
+        extend_list = bool(ctx.engine.process_value(step.get("extend", True), ctx))
+
+        if has_from:
+            ptr = ctx.engine.process_value(step["from"], ctx)
+            try:
+                value = ctx.engine.processor.get(ptr, ctx)
+            except Exception:
+                if "default" in step:
+                    return self._write_default(step, ctx, path, create, extend_list)
+                raise
+        else:
+            value = ctx.engine.process_value(step["value"], ctx)
+
+        try:
+            rendered = _serialize_format(fmt, value)
+        except Exception as exc:
+            if "default" in step:
+                return self._write_default(step, ctx, path, create, extend_list)
+            raise ValueError(f"serialize: failed to render as '{fmt}': {exc}") from exc
+
+        return self._set.execute(
+            {"op": "set", "path": path, "value": rendered, "create": create, "extend": extend_list},
+            ctx,
+        )
+
+    def _write_default(self, step: Any, ctx: ExecutionContext, path: Any,
+                       create: bool, extend_list: bool) -> Any:
+        fallback = ctx.engine.process_value(step["default"], ctx)
+        return self._set.execute(
+            {"op": "set", "path": path, "value": fallback, "create": create, "extend": extend_list},
+            ctx,
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# encode / decode — text ↔ text through a base/url codec
+# ─────────────────────────────────────────────────────────────────────────────
+
+_CODECS = frozenset({
+    "base64", "base64url", "base32", "base16", "hex", "base85", "ascii85", "url",
+})
+
+
+def _encode_codec(codec: str, raw: str, encoding: str) -> str:
+    """Encode text *raw* into an ASCII codec string."""
+    if codec == "url":
+        return _url_quote(raw, safe="", encoding=encoding)
+    data = raw.encode(encoding)
+    if codec == "base64":
+        return _base64.b64encode(data).decode("ascii")
+    if codec == "base64url":
+        return _base64.urlsafe_b64encode(data).decode("ascii")
+    if codec == "base32":
+        return _base64.b32encode(data).decode("ascii")
+    if codec == "base16":
+        return _base64.b16encode(data).decode("ascii")
+    if codec == "hex":
+        return _binascii.hexlify(data).decode("ascii")
+    if codec == "base85":
+        return _base64.b85encode(data).decode("ascii")
+    # codec == "ascii85"
+    return _base64.a85encode(data).decode("ascii")
+
+
+def _decode_codec(codec: str, raw: str, encoding: str) -> str:
+    """Decode a codec string *raw* back into text."""
+    if codec == "url":
+        return _url_unquote(raw, encoding=encoding)
+    ascii_bytes = raw.encode("ascii")
+    if codec == "base64":
+        data = _base64.b64decode(ascii_bytes, validate=True)
+    elif codec == "base64url":
+        data = _base64.urlsafe_b64decode(ascii_bytes)
+    elif codec == "base32":
+        data = _base64.b32decode(ascii_bytes)
+    elif codec == "base16":
+        data = _base64.b16decode(ascii_bytes)
+    elif codec == "hex":
+        data = _binascii.unhexlify(ascii_bytes)
+    elif codec == "base85":
+        data = _base64.b85decode(ascii_bytes)
+    else:  # codec == "ascii85"
+        data = _base64.a85decode(ascii_bytes)
+    return data.decode(encoding)
+
+
+class _CodecHandler(ActionHandler):
+    """Shared ``from``/``value`` + codec resolution for ``encode`` / ``decode``.
+
+    Subclasses set :attr:`_op` (the op name, for messages) and implement
+    :meth:`_transform` (the pure text→text codec step).
+    """
+
+    _op: str = ""
+
+    def __init__(self, set_handler: SetHandler | None = None) -> None:
+        self._set = set_handler or SetHandler()
+
+    def _transform(self, codec: str, raw: str, encoding: str) -> str:  # pragma: no cover
+        raise NotImplementedError
+
+    def execute(self, step: Any, ctx: ExecutionContext) -> Any:
+        has_from = "from" in step
+        has_value = "value" in step
+
+        if has_from and has_value:
+            raise ValueError(f"{self._op} cannot have both 'from' and 'value'")
+        if not has_from and not has_value:
+            raise ValueError(f"{self._op} requires either 'from' or 'value'")
+
+        codec = ctx.engine.process_value(step.get("codec", "base64"), ctx)
+        if codec not in _CODECS:
+            raise ValueError(
+                f"{self._op}: unknown codec '{codec}'. Supported: {', '.join(sorted(_CODECS))}"
+            )
+
+        encoding = ctx.engine.process_value(step.get("encoding", "utf-8"), ctx)
+        path = ctx.engine.process_value(step["path"], ctx)
+        create = bool(ctx.engine.process_value(step.get("create", True), ctx))
+        extend_list = bool(ctx.engine.process_value(step.get("extend", True), ctx))
+
+        if has_from:
+            ptr = ctx.engine.process_value(step["from"], ctx)
+            try:
+                raw = ctx.engine.processor.get(ptr, ctx)
+            except Exception:
+                if "default" in step:
+                    return self._write_default(step, ctx, path, create, extend_list)
+                raise
+        else:
+            raw = ctx.engine.process_value(step["value"], ctx)
+
+        try:
+            result = self._transform(codec, raw, encoding)
+        except Exception as exc:
+            if "default" in step:
+                return self._write_default(step, ctx, path, create, extend_list)
+            verb = "encode" if self._op == "encode" else "decode"
+            raise ValueError(f"{self._op}: failed to {verb} as '{codec}': {exc}") from exc
+
+        return self._set.execute(
+            {"op": "set", "path": path, "value": result, "create": create, "extend": extend_list},
+            ctx,
+        )
+
+    def _write_default(self, step: Any, ctx: ExecutionContext, path: Any,
+                       create: bool, extend_list: bool) -> Any:
+        fallback = ctx.engine.process_value(step["default"], ctx)
+        return self._set.execute(
+            {"op": "set", "path": path, "value": fallback, "create": create, "extend": extend_list},
+            ctx,
+        )
+
+
+class EncodeHandler(_CodecHandler):
+    """``op: encode`` — encode a text string through a base/url codec.
+
+    Schema::
+
+        {"op": "encode", "from": "/text",
+         "codec": "base64", "encoding": "utf-8", "path": "/result",
+         "create": true, "extend": true, "default": <fallback>}
+
+    * ``from`` — source pointer to the text (supports all context prefixes)
+    * ``value`` — inline text (mutually exclusive with ``from``)
+    * ``codec`` — ``base64`` (default), ``base64url``, ``base32``, ``base16``,
+      ``hex``, ``base85``, ``ascii85``, ``url`` (percent-encoding)
+    * ``encoding`` (default ``"utf-8"``) — text encoding before/after the codec
+    * ``path`` — destination pointer
+    * ``create`` / ``extend`` — as in ``set``
+    * ``default`` — fallback if the source pointer or the codec fails
+
+    Text → ``encoding`` bytes → codec → ASCII string.  Inverse of ``decode``.
+    """
+
+    _op = "encode"
+
+    def _transform(self, codec: str, raw: str, encoding: str) -> str:
+        return _encode_codec(codec, raw, encoding)
+
+
+class DecodeHandler(_CodecHandler):
+    """``op: decode`` — decode a codec string back into text.
+
+    Schema mirrors :class:`EncodeHandler`.  Codec string → bytes →
+    ``encoding``-decoded text.  Inverse of ``encode``.
+    """
+
+    _op = "decode"
+
+    def _transform(self, codec: str, raw: str, encoding: str) -> str:
+        return _decode_codec(codec, raw, encoding)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# hash — deterministic digest of data
+# ─────────────────────────────────────────────────────────────────────────────
+
+_HASH_ALGOS = frozenset({
+    "sha256", "sha512", "sha1", "md5", "sha3_256", "sha3_512", "blake2b", "blake2s",
+})
+_HASH_OUTPUTS = frozenset({"hex", "base64", "base64url"})
+
+
+def _hash_input_bytes(value: Any, encoding: str) -> bytes:
+    """Turn *value* into the bytes to hash: a string uses its own encoding, any
+    other value is canonically serialized so equal objects hash equally."""
+    if isinstance(value, str):
+        return value.encode(encoding)
+    canonical = _json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return canonical.encode(encoding)
+
+
+def _hash_digest(algo: str, output: str, data: bytes) -> str:
+    digest = _hashlib.new(algo, data).digest()
+    if output == "hex":
+        return _binascii.hexlify(digest).decode("ascii")
+    if output == "base64":
+        return _base64.b64encode(digest).decode("ascii")
+    # output == "base64url"
+    return _base64.urlsafe_b64encode(digest).decode("ascii")
+
+
+class HashHandler(ActionHandler):
+    """``op: hash`` — compute a deterministic digest of a value.
+
+    Schema::
+
+        {"op": "hash", "from": "/obj",
+         "algo": "sha256", "output": "hex", "encoding": "utf-8",
+         "path": "/checksum", "create": true, "extend": true, "default": <fallback>}
+
+    * ``from`` — source pointer to the data (supports all context prefixes)
+    * ``value`` — inline value (mutually exclusive with ``from``)
+    * ``algo`` — ``sha256`` (default), ``sha512``, ``sha1``, ``md5``,
+      ``sha3_256``, ``sha3_512``, ``blake2b``, ``blake2s``
+    * ``output`` — digest encoding: ``hex`` (default), ``base64``, ``base64url``
+    * ``encoding`` (default ``"utf-8"``) — text encoding for string / canonical inputs
+    * ``path`` — destination pointer
+    * ``create`` / ``extend`` — as in ``set``
+    * ``default`` — fallback if the source pointer fails
+
+    A string input is hashed as its ``encoding`` bytes; any other value is first
+    canonically serialized (``json.dumps(value, sort_keys=True)``) so equal
+    objects hash equally.  Deterministic — a checksum check is just
+    ``hash`` + ``assert``.
+    """
+
+    def __init__(self, set_handler: SetHandler | None = None) -> None:
+        self._set = set_handler or SetHandler()
+
+    def execute(self, step: Any, ctx: ExecutionContext) -> Any:
+        has_from = "from" in step
+        has_value = "value" in step
+
+        if has_from and has_value:
+            raise ValueError("hash cannot have both 'from' and 'value'")
+        if not has_from and not has_value:
+            raise ValueError("hash requires either 'from' or 'value'")
+
+        algo = ctx.engine.process_value(step.get("algo", "sha256"), ctx)
+        if algo not in _HASH_ALGOS:
+            raise ValueError(
+                f"hash: unknown algo '{algo}'. Supported: {', '.join(sorted(_HASH_ALGOS))}"
+            )
+
+        output = ctx.engine.process_value(step.get("output", "hex"), ctx)
+        if output not in _HASH_OUTPUTS:
+            raise ValueError(
+                f"hash: unknown output '{output}'. Supported: {', '.join(sorted(_HASH_OUTPUTS))}"
+            )
+
+        encoding = ctx.engine.process_value(step.get("encoding", "utf-8"), ctx)
+        path = ctx.engine.process_value(step["path"], ctx)
+        create = bool(ctx.engine.process_value(step.get("create", True), ctx))
+        extend_list = bool(ctx.engine.process_value(step.get("extend", True), ctx))
+
+        if has_from:
+            ptr = ctx.engine.process_value(step["from"], ctx)
+            try:
+                value = ctx.engine.processor.get(ptr, ctx)
+            except Exception:
+                if "default" in step:
+                    fallback = ctx.engine.process_value(step["default"], ctx)
+                    return self._set.execute(
+                        {"op": "set", "path": path, "value": fallback,
+                         "create": create, "extend": extend_list},
+                        ctx,
+                    )
+                raise
+        else:
+            value = ctx.engine.process_value(step["value"], ctx)
+
+        digest = _hash_digest(algo, output, _hash_input_bytes(value, encoding))
+
+        return self._set.execute(
+            {"op": "set", "path": path, "value": digest, "create": create, "extend": extend_list},
+            ctx,
+        )

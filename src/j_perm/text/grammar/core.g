@@ -31,6 +31,7 @@ stmt -> continuest
 stmt -> exitst
 stmt -> execst
 stmt -> opst
+stmt -> opfnst
 stmt -> callstmt
 
 suite -> ':' NEWLINE INDENT block DEDENT
@@ -90,6 +91,12 @@ execst -> 'exec' POINTER 'merge'
 execst -> 'exec' suite
 opst -> 'op' STRING '(' args ')' suite
 opst -> 'op' STRING '(' args ')'
+opfnst -> POINTER '=' opfn '(' args ')'
+opfn -> 'serialize'
+opfn -> 'deserialize'
+opfn -> 'encode'
+opfn -> 'decode'
+opfn -> 'hash'
 callstmt -> call
 
 expr -> coalesce
