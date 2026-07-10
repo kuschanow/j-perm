@@ -25,7 +25,7 @@ from .handlers.constructs import (
     # Core
     ref_handler, eval_handler, raw_handler,
     # Logical
-    and_handler, or_handler, not_handler,
+    and_handler, or_handler, not_handler, if_handler,
     # Comparison
     gt_handler, gte_handler, lt_handler, lte_handler, eq_handler, ne_handler, in_handler,
     exists_handler,
@@ -67,6 +67,7 @@ LOGICAL_HANDLERS = {
     "$and": and_handler,
     "$or": or_handler,
     "$not": not_handler,
+    "$if": if_handler,
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

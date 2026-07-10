@@ -562,6 +562,35 @@ def not_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
     return not result
 
 
+def if_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$if`` construct: ternary (conditional) *value* expression.
+
+    Schema::
+
+        {"$if": <condition>, "$then": <value>, "$else": <value>}
+        {"$if": <condition>, "$then": <value>}
+
+    Behavior:
+    * ``$if`` is processed through ``process_value``; its truthiness selects a branch
+    * Lazy — only the taken branch is processed (the other is left untouched,
+      so it never raises or produces side effects), like ``$and`` / ``$or``
+    * ``$then`` is returned (processed) when the condition is truthy
+    * ``$else`` is returned (processed) when the condition is falsy;
+      if ``$else`` is omitted, a falsy condition yields ``None``
+    * The branches carry *values* (expressions), not operation blocks — for
+      statement-level branching use the ``if`` op instead
+
+    Examples::
+
+        {"$if": {"$gte": [{"$ref": "/age"}, 18]}, "$then": "adult", "$else": "minor"}
+        {"$if": {"$ref": "/enabled"}, "$then": {"$ref": "/value"}, "$else": 0}
+        {"$if": "${/flag}", "$then": "yes"}                       # → "yes" or None
+    """
+    if ctx.engine.process_value(node["$if"], ctx):
+        return ctx.engine.process_value(node.get("$then"), ctx)
+    return ctx.engine.process_value(node.get("$else"), ctx)
+
+
 def gt_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
     """``$gt`` construct: greater than comparison.
 

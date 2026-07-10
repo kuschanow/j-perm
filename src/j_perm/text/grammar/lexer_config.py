@@ -121,6 +121,7 @@ LEXER_CONFIG = {
                 {"exact": ";", "emit": "SEMI"},
                 {"exact": ".", "emit": "DOT"},
                 {"exact": "!", "emit": "BANG"},
+                {"exact": "?", "emit": "QUESTION"},
             ],
         }
     },

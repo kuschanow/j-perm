@@ -60,6 +60,32 @@ class TestConstructEdges:
         with pytest.raises(ValueError):
             await self._val(eng, {"$str_strip": "${int:/n}"}, source={"n": "5"})
 
+    async def test_if_truthy_selects_then(self):
+        eng = build_default_async_engine()
+        r = await self._val(
+            eng, {"$if": {"$ref": "/flag"}, "$then": "a", "$else": "b"},
+            source={"flag": True})
+        assert r == "a"
+
+    async def test_if_falsy_selects_else(self):
+        eng = build_default_async_engine()
+        r = await self._val(
+            eng, {"$if": {"$ref": "/flag"}, "$then": "a", "$else": "b"},
+            source={"flag": 0})
+        assert r == "b"
+
+    async def test_if_else_omitted_yields_none(self):
+        eng = build_default_async_engine()
+        r = await self._val(eng, {"$if": False, "$then": "a"})
+        assert r is None
+
+    async def test_if_is_lazy(self):
+        eng = build_default_async_engine()
+        # untaken $else references a missing pointer and must not be evaluated
+        r = await self._val(
+            eng, {"$if": True, "$then": 1, "$else": {"$ref": "/missing"}})
+        assert r == 1
+
 
 class TestAsyncEdgeBranches:
     async def test_while_return_propagates(self):

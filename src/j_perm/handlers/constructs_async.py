@@ -85,6 +85,12 @@ async def not_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
     return not result
 
 
+async def if_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    if await ctx.engine.process_value_async(node["$if"], ctx):
+        return await ctx.engine.process_value_async(node.get("$then"), ctx)
+    return await ctx.engine.process_value_async(node.get("$else"), ctx)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # comparisons
 # ─────────────────────────────────────────────────────────────────────────────

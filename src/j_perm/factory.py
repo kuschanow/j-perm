@@ -107,6 +107,7 @@ def _default_specials(
         "$and": c.and_handler,
         "$or": c.or_handler,
         "$not": c.not_handler,
+        "$if": c.if_handler,
         "$cast": c.make_cast_handler(resolved_casters),
         "$gt": c.gt_handler,
         "$gte": c.gte_handler,
