@@ -12,7 +12,7 @@ function   – function definition, calling, and error raising
 
 from .constructs import (
     ref_handler, eval_handler, make_cast_handler,
-    and_handler, or_handler, not_handler,
+    and_handler, or_handler, not_handler, if_handler,
     gt_handler, gte_handler, lt_handler, lte_handler, eq_handler, ne_handler, in_handler,
     exists_handler,
     add_handler, make_add_handler,
@@ -85,6 +85,7 @@ __all__ = [
     "and_handler",
     "or_handler",
     "not_handler",
+    "if_handler",
     "gt_handler",
     "gte_handler",
     "lt_handler",

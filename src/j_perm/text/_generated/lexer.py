@@ -42,6 +42,7 @@ _RE_root_r34 = re.compile(':')
 _RE_root_r35 = re.compile(';')
 _RE_root_r36 = re.compile('\\.')
 _RE_root_r37 = re.compile('!')
+_RE_root_r38 = re.compile('\\?')
 
 _DYN_TEMPLATES = {}
 _STATE_FUNCS = {'root': '_lex_root'}
@@ -374,6 +375,12 @@ def _lex_root(text, pos, stack, frame):
     if m is not None:
         _result = []
         _toks = [_Token('BANG', m.group(), _pos(text, pos))]
+        _result.extend(_toks)
+        return _result, m.end()
+    m = _RE_root_r38.match(text, pos)
+    if m is not None:
+        _result = []
+        _toks = [_Token('QUESTION', m.group(), _pos(text, pos))]
         _result.extend(_toks)
         return _result, m.end()
     return None

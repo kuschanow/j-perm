@@ -326,6 +326,88 @@ class TestNotHandler:
         assert result == {"result": True}
 
 
+class TestIfConstruct:
+    """Test $if ternary (conditional value) construct."""
+
+    def test_if_truthy_selects_then(self):
+        """$if returns the processed $then branch when the condition is truthy."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/label": {"$if": {"$gte": [{"$ref": "/age"}, 18]},
+                        "$then": "adult", "$else": "minor"}},
+            source={"age": 20},
+            dest={},
+        )
+
+        assert result == {"label": "adult"}
+
+    def test_if_falsy_selects_else(self):
+        """$if returns the processed $else branch when the condition is falsy."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/label": {"$if": {"$gte": [{"$ref": "/age"}, 18]},
+                        "$then": "adult", "$else": "minor"}},
+            source={"age": 5},
+            dest={},
+        )
+
+        assert result == {"label": "minor"}
+
+    def test_if_branches_are_processed(self):
+        """Both branches are run through the value pipeline (not returned raw)."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/v": {"$if": {"$ref": "/flag"},
+                    "$then": {"$ref": "/a"}, "$else": {"$ref": "/b"}}},
+            source={"flag": True, "a": 10, "b": 20},
+            dest={},
+        )
+
+        assert result == {"v": 10}
+
+    def test_if_else_omitted_yields_none_when_falsy(self):
+        """A falsy condition with no $else yields None."""
+        engine = build_default_engine()
+
+        result = engine.apply(
+            {"/v": {"$if": {"$ref": "/flag"}, "$then": "yes"}},
+            source={"flag": ""},
+            dest={},
+        )
+
+        assert result == {"v": None}
+
+    def test_if_is_lazy_untaken_branch_not_evaluated(self):
+        """Only the taken branch is processed — the other never raises."""
+        engine = build_default_engine()
+
+        # $else references a missing pointer; it must not be touched.
+        result = engine.apply(
+            {"/v": {"$if": True, "$then": 1,
+                    "$else": {"$ref": "/does/not/exist"}}},
+            source={},
+            dest={},
+        )
+
+        assert result == {"v": 1}
+
+    def test_if_nested_as_elif_chain(self):
+        """Nested $if in the $else branch forms an elif-style chain."""
+        engine = build_default_engine()
+
+        spec = {"/sign": {
+            "$if": {"$gt": [{"$ref": "/n"}, 0]}, "$then": "pos",
+            "$else": {"$if": {"$lt": [{"$ref": "/n"}, 0]}, "$then": "neg",
+                      "$else": "zero"}}}
+
+        assert engine.apply(spec, source={"n": 5}, dest={}) == {"sign": "pos"}
+        assert engine.apply(spec, source={"n": -5}, dest={}) == {"sign": "neg"}
+        assert engine.apply(spec, source={"n": 0}, dest={}) == {"sign": "zero"}
+
+
 class TestDestPointer:
     """Test @:/path syntax for accessing dest in templates."""
 

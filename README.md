@@ -3,7 +3,7 @@
 A composable JSON transformation DSL with a powerful, extensible architecture.
 
 J-Perm lets you describe data transformations as **executable specifications** — a list of steps that can be applied to input documents. It supports
-JSON Pointer addressing with slicing (arrays and strings), template interpolation with `${...}` syntax, special constructs (`$ref`, `$eval`, `$cast`, `$raw`), logical and comparison operators (`$and`, `$or`, `$not`), comparison operators (6 operators plus `$in` and `$exists`), mathematical operations (6 operators), comprehensive string manipulation (11 operations), regular expressions (5 operations), user-defined functions (`$def`, `$func`, `$raise`) with loop/function/script control flow (`$break`, `$continue`, `$return`, `$exit`), error handling (`try-except-finally`), and a rich set of built-in operations — all with configurable security limits to prevent DoS attacks. Specs can be written as JSON op-dicts or in a compact [text syntax](#9-text-syntax) (the two mix freely in one list).
+JSON Pointer addressing with slicing (arrays and strings), template interpolation with `${...}` syntax, special constructs (`$ref`, `$eval`, `$cast`, `$raw`), logical operators (`$and`, `$or`, `$not`, and the `$if` ternary), comparison operators (6 operators plus `$in` and `$exists`), mathematical operations (6 operators), comprehensive string manipulation (11 operations), regular expressions (5 operations), user-defined functions (`$def`, `$func`, `$raise`) with loop/function/script control flow (`$break`, `$continue`, `$return`, `$exit`), error handling (`try-except-finally`), and a rich set of built-in operations — all with configurable security limits to prevent DoS attacks. Specs can be written as JSON op-dicts or in a compact [text syntax](#9-text-syntax) (the two mix freely in one list).
 
 ---
 
@@ -947,6 +947,50 @@ spec = {
 spec = {
     "/is_enabled": {
         "$not": {"$ref": "/settings/disabled"}
+    }
+}
+```
+
+#### `$if` — Ternary (conditional value)
+
+```json
+{
+    "$if": {"$gte": [{"$ref": "/age"}, 18]},
+    "$then": "adult",
+    "$else": "minor"
+}
+```
+
+- A **value** construct (an expression that returns a value), not a statement —
+  its `$then` / `$else` branches carry *values*, not operation blocks. For
+  statement-level branching that mutates `dest`, use the [`if` op](#if) instead.
+- The `$if` condition is processed through the value pipeline; its truthiness
+  selects a branch.
+- Lazy — only the taken branch is processed (like `$and` / `$or`), so the
+  untaken branch never raises or produces side effects.
+- `$else` is optional: a falsy condition with no `$else` yields `null`.
+- Nest a `$if` inside `$else` for an elif-style chain.
+
+**Example:**
+
+```python
+# Choose a value inline
+spec = {
+    "/discount": {
+        "$if": {"$gte": [{"$ref": "/order/total"}, 100]},
+        "$then": {"$mul": [{"$ref": "/order/total"}, 0.1]},
+        "$else": 0
+    }
+}
+
+# elif-style chain via nested $if
+spec = {
+    "/sign": {
+        "$if": {"$gt": [{"$ref": "/n"}, 0]}, "$then": "pos",
+        "$else": {
+            "$if": {"$lt": [{"$ref": "/n"}, 0]}, "$then": "neg",
+            "$else": "zero"
+        }
     }
 }
 ```
@@ -1982,6 +2026,11 @@ pointer use `$(...)`.
 | `== != < <= > >=` | `{$eq / $ne / $lt / $lte / $gt / $gte}` |
 | `X in Y` | `{$in: [X, Y]}` |
 | `and` / `or` / `??` | `{$and}` / `{$or}` / `{$or}` (coalesce) |
+| `COND ? A : B` | `{$if: COND, $then: A, $else: B}` (ternary, right-assoc.) |
+
+The ternary `?:` has the lowest precedence and is right-associative, so
+`a ? 1 : b ? 2 : 3` parses as `a ? 1 : (b ? 2 : 3)` — the text form of an
+elif-style chain.
 
 Calls map known names to constructs; anything else becomes a `$func`:
 
@@ -2859,7 +2908,7 @@ from j_perm import (
 
 **Available groups:**
 - `CORE_HANDLERS` — Core constructs (`$ref`, `$eval`)
-- `LOGICAL_HANDLERS` — Logical operators (`$and`, `$or`, `$not`)
+- `LOGICAL_HANDLERS` — Logical operators (`$and`, `$or`, `$not`, `$if`)
 - `COMPARISON_HANDLERS` — Comparison operators (`$gt`, `$gte`, `$lt`, `$lte`, `$eq`, `$ne`, `$in`, `$exists`)
 - `MATH_HANDLERS` — Mathematical operators with default limits (`$add`, `$sub`, `$mul`, `$div`, `$pow`, `$mod`, `$round`)
 - `STRING_HANDLERS` — String operations with default limits (11 constructs)

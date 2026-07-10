@@ -62,10 +62,12 @@ def xv(n):
     ch = kids(n)
 
     # single-child passthrough for the precedence cascade
-    if name in ("expr", "coalesce", "orx", "andx", "cmp", "addx", "mulx",
+    if name in ("expr", "ternary", "coalesce", "orx", "andx", "cmp", "addx", "mulx",
                 "powx", "notx", "unary", "arg") and len(ch) == 1:
         return xv(ch[0])
 
+    if name == "ternary":       # coalesce '?' expr ':' ternary
+        return {"$if": xv(ch[0]), "$then": xv(ch[2]), "$else": xv(ch[4])}
     if name == "coalesce":      # coalesce '??' orx
         return {"$or": [xv(ch[0]), xv(ch[2])]}
     if name == "orx":

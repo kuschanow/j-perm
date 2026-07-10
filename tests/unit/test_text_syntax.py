@@ -299,6 +299,23 @@ def test_logical_and_or_not_coalesce():
     assert one('/r = $(/a) ?? 1')["value"] == {"$or": [{"$ref": "/a"}, 1]}
 
 
+def test_ternary():
+    assert one('/r = $(/a) ? 1 : 2')["value"] == {
+        "$if": {"$ref": "/a"}, "$then": 1, "$else": 2}
+
+
+def test_ternary_right_associative():
+    # a ? 1 : b ? 2 : 3  →  a ? 1 : (b ? 2 : 3)
+    assert one('/r = $(/a) ? 1 : $(/b) ? 2 : 3')["value"] == {
+        "$if": {"$ref": "/a"}, "$then": 1,
+        "$else": {"$if": {"$ref": "/b"}, "$then": 2, "$else": 3}}
+
+
+def test_ternary_with_comparison_condition():
+    assert one('/r = $(/n) > 0 ? "pos" : "neg"')["value"] == {
+        "$if": {"$gt": [{"$ref": "/n"}, 0]}, "$then": "pos", "$else": "neg"}
+
+
 def test_unary_minus_number_and_expr():
     assert one('/r = -5')["value"] == -5
     assert one('/r = -$(/a)')["value"] == {"$sub": [0, {"$ref": "/a"}]}

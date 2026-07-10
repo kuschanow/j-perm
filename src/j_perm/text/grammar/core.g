@@ -99,7 +99,9 @@ opfn -> 'decode'
 opfn -> 'hash'
 callstmt -> call
 
-expr -> coalesce
+expr -> ternary
+ternary -> coalesce '?' expr ':' ternary
+ternary -> coalesce
 coalesce -> coalesce '??' orx
 coalesce -> orx
 orx -> orx 'or' andx
