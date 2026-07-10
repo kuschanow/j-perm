@@ -92,6 +92,7 @@ def _default_specials(
         add_max_number_result: float,
         add_max_string_result: int,
         sub_max_number_result: float,
+        map_filter_max_items: int,
 ) -> dict[str, SpecialFn]:
     """Build the default ``$``-construct map from a constructs module *c*.
 
@@ -157,6 +158,26 @@ def _default_specials(
             timeout=regex_timeout, allowed_flags=regex_allowed_flags),
         "$regex_groups": c.make_regex_groups_handler(
             timeout=regex_timeout, allowed_flags=regex_allowed_flags),
+        # Collection / value operations
+        "$len": c.len_handler,
+        "$keys": c.keys_handler,
+        "$values": c.values_handler,
+        "$items": c.items_handler,
+        "$reverse": c.reverse_handler,
+        "$slice": c.slice_handler,
+        "$flatten": c.flatten_handler,
+        "$type": c.type_handler,
+        "$sum": c.sum_handler,
+        "$avg": c.avg_handler,
+        "$min": c.min_handler,
+        "$max": c.max_handler,
+        "$sort": c.sort_handler,
+        "$unique": c.unique_handler,
+        "$abs": c.abs_handler,
+        "$floor": c.floor_handler,
+        "$ceil": c.ceil_handler,
+        "$map": c.make_map_handler(max_items=map_filter_max_items),
+        "$filter": c.make_filter_handler(max_items=map_filter_max_items),
         # $func before $raw so {"$func": ..., "$raw": True} dispatches to $func.
         "$func": call_execute,
         "$raw": c.raw_handler,
@@ -257,6 +278,7 @@ def _make_engine(
         add_max_number_result: float,
         add_max_string_result: int,
         sub_max_number_result: float,
+        map_filter_max_items: int,
         trace_logging: bool,
         trace_repr_max: int | None,
         text_syntax: bool,
@@ -288,6 +310,7 @@ def _make_engine(
             add_max_number_result=add_max_number_result,
             add_max_string_result=add_max_string_result,
             sub_max_number_result=sub_max_number_result,
+            map_filter_max_items=map_filter_max_items,
         )
 
     value_pipeline = _build_value_pipeline(
@@ -344,6 +367,7 @@ def build_default_engine(
         # Loop and iteration limits
         max_loop_iterations: int = 10_000,
         max_foreach_items: int = 100_000,
+        map_filter_max_items: int = 100_000,
         # String operation limits
         str_max_split_results: int = 100_000,
         str_max_join_result: int = 10_000_000,
@@ -411,6 +435,7 @@ def build_default_engine(
         max_function_recursion_depth=max_function_recursion_depth,
         add_max_number_result=add_max_number_result, add_max_string_result=add_max_string_result,
         sub_max_number_result=sub_max_number_result,
+        map_filter_max_items=map_filter_max_items,
         trace_logging=trace_logging, trace_repr_max=trace_repr_max,
         text_syntax=text_syntax,
         constructs_module=_constructs,
@@ -435,6 +460,7 @@ def build_default_async_engine(
         mul_max_operand: float = 1e9,
         max_loop_iterations: int = 10_000,
         max_foreach_items: int = 100_000,
+        map_filter_max_items: int = 100_000,
         str_max_split_results: int = 100_000,
         str_max_join_result: int = 10_000_000,
         str_max_replace_result: int = 10_000_000,
@@ -506,6 +532,7 @@ def build_default_async_engine(
         max_function_recursion_depth=max_function_recursion_depth,
         add_max_number_result=add_max_number_result, add_max_string_result=add_max_string_result,
         sub_max_number_result=sub_max_number_result,
+        map_filter_max_items=map_filter_max_items,
         trace_logging=trace_logging, trace_repr_max=trace_repr_max,
         text_syntax=text_syntax,
         constructs_module=_constructs_async,
