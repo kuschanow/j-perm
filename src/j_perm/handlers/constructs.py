@@ -177,6 +177,170 @@ def _replace_compute(string: Any, old: Any, new: Any, count: Any, max_result_len
     return string.replace(old, new, count)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Collection / value helpers — pure, shared by sync constructs (below) and their
+# async twins in ``constructs_async.py``.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _len_compute(value: Any) -> int:
+    if isinstance(value, (str, list, tuple, dict)):
+        return len(value)
+    raise ValueError(f"$len requires a string, list, or dict, got {type(value).__name__}")
+
+
+def _keys_compute(value: Any) -> list:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"$keys requires a dict, got {type(value).__name__}")
+    return list(value.keys())
+
+
+def _values_compute(value: Any) -> list:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"$values requires a dict, got {type(value).__name__}")
+    return list(value.values())
+
+
+def _items_compute(value: Any) -> list:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"$items requires a dict, got {type(value).__name__}")
+    return [[k, v] for k, v in value.items()]
+
+
+def _reverse_compute(value: Any) -> Any:
+    if isinstance(value, str):
+        return value[::-1]
+    if isinstance(value, (list, tuple)):
+        return list(value)[::-1]
+    raise ValueError(f"$reverse requires a string or list, got {type(value).__name__}")
+
+
+def _slice_compute(array: Any, start: Any, end: Any, step: Any) -> list:
+    if not isinstance(array, (list, tuple)):
+        raise ValueError(f"$slice requires a list, got {type(array).__name__}")
+    return list(array)[start:end:step]
+
+
+def _flatten_compute(array: Any, depth: Any) -> list:
+    if not isinstance(array, (list, tuple)):
+        raise ValueError(f"$flatten requires a list, got {type(array).__name__}")
+
+    def rec(items: Any, d: int) -> list:
+        out: list = []
+        for item in items:
+            if d != 0 and isinstance(item, (list, tuple)):
+                out.extend(rec(item, d - 1 if d > 0 else d))
+            else:
+                out.append(item)
+        return out
+
+    return rec(list(array), depth)
+
+
+def _type_compute(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, (list, tuple)):
+        return "list"
+    if isinstance(value, Mapping):
+        return "dict"
+    return type(value).__name__
+
+
+def _require_number_list(key: str, array: Any) -> None:
+    if not isinstance(array, (list, tuple)):
+        raise ValueError(f"{key} requires a list, got {type(array).__name__}")
+    for item in array:
+        if isinstance(item, bool) or not isinstance(item, (int, float)):
+            raise ValueError(
+                f"{key} requires a list of numbers, got element of type {type(item).__name__}"
+            )
+
+
+def _sum_compute(array: Any) -> Any:
+    _require_number_list("$sum", array)
+    return sum(array)
+
+
+def _avg_compute(array: Any) -> Any:
+    _require_number_list("$avg", array)
+    if not array:
+        raise ValueError("$avg requires a non-empty list")
+    return sum(array) / len(array)
+
+
+def _minmax_compute(key: str, array: Any, which: str, key_fn: Any) -> Any:
+    if not isinstance(array, (list, tuple)):
+        raise ValueError(f"{key} requires a list, got {type(array).__name__}")
+    if not array:
+        raise ValueError(f"{key} requires a non-empty list")
+    fn = max if which == "max" else min
+    if key_fn is not None:
+        return fn(array, key=key_fn)
+    return fn(array)
+
+
+def _sort_compute(array: Any, key_fn: Any, reverse: bool) -> list:
+    if not isinstance(array, (list, tuple)):
+        raise ValueError(f"$sort requires a list, got {type(array).__name__}")
+    if key_fn is not None:
+        return sorted(array, key=key_fn, reverse=reverse)
+    return sorted(array, reverse=reverse)
+
+
+def _unique_compute(array: Any, key_fn: Any) -> list:
+    if not isinstance(array, (list, tuple)):
+        raise ValueError(f"$unique requires a list, got {type(array).__name__}")
+    seen: set = set()
+    out: list = []
+    for item in array:
+        marker = key_fn(item) if key_fn is not None else item
+        try:
+            if marker not in seen:
+                seen.add(marker)
+                out.append(item)
+        except TypeError:
+            # Unhashable marker — always include (matches op: distinct)
+            out.append(item)
+    return out
+
+
+def _abs_compute(value: Any) -> Any:
+    if not isinstance(value, (int, float)):
+        raise ValueError(f"$abs requires a number, got {type(value).__name__}")
+    return abs(value)
+
+
+def _floor_compute(value: Any) -> int:
+    if not isinstance(value, (int, float)):
+        raise ValueError(f"$floor requires a number, got {type(value).__name__}")
+    return math.floor(value)
+
+
+def _ceil_compute(value: Any) -> int:
+    if not isinstance(value, (int, float)):
+        raise ValueError(f"$ceil requires a number, got {type(value).__name__}")
+    return math.ceil(value)
+
+
+def _normalize_map_iterable(key: str, array: Any, max_items: int) -> list:
+    """Normalise the input of ``$map`` / ``$filter``: dict→items, size cap."""
+    if isinstance(array, dict):
+        array = [[k, v] for k, v in array.items()]
+    if not isinstance(array, (list, tuple)):
+        raise ValueError(f"{key} 'in' must be a list or dict, got {type(array).__name__}")
+    if len(array) > max_items:
+        raise ValueError(
+            f"{key} input size ({len(array)}) exceeds maximum ({max_items})"
+        )
+    return list(array)
+
+
 def _resolve_allowed_flags(allowed_flags: int | None) -> int:
     """Normalise the ``allowed_flags`` argument shared by the regex handlers."""
     if allowed_flags is None:
@@ -225,15 +389,17 @@ def _regex_findall_compute(key, pattern, string, flags, resolved_flags, timeout)
         raise TimeoutError(f"Regex operation exceeded timeout of {timeout}s")
 
 
-def _regex_groups_compute(key, pattern, string, flags, resolved_flags, timeout):
+def _regex_groups_compute(key, pattern, string, flags, resolved_flags, timeout, named=False):
     if not isinstance(string, str):
         raise ValueError(f"{key} 'string' must be a string, got {type(string).__name__}")
     _validate_regex_flags(key, flags, resolved_flags)
     try:
         match = regex.search(pattern, string, flags, timeout=timeout)
-        return list(match.groups()) if match else []
     except TimeoutError:
         raise TimeoutError(f"Regex operation exceeded timeout of {timeout}s")
+    if named:
+        return dict(match.groupdict()) if match else {}
+    return list(match.groups()) if match else []
 
 
 def _regex_replace_compute(pattern, replacement, string, count, flags, resolved_flags, timeout):
@@ -1483,10 +1649,13 @@ def make_regex_groups_handler(
 
             {"$regex_groups": {"pattern": <str>, "string": <str>}}
             {"$regex_groups": {"pattern": <str>, "string": <str>, "flags": <int>}}
+            {"$regex_groups": {"pattern": <str>, "string": <str>, "named": <bool>}}
 
         Behavior:
-        * Searches for pattern and returns list of captured groups
-        * Returns empty list if no match found
+        * Searches for pattern and returns captured groups
+        * ``named`` (default ``false``) — when true, returns a ``{name: value}``
+          dict of named groups (``match.groupdict()``) instead of a positional list
+        * Returns empty list (or empty dict when ``named``) if no match found
         * Does not include group 0 (full match)
 
         Examples::
@@ -1494,13 +1663,16 @@ def make_regex_groups_handler(
             {"$regex_groups": {"pattern": "(\\\\w+)@(\\\\w+)", "string": "user@domain"}}  → ["user", "domain"]
             {"$regex_groups": {"pattern": "(\\\\d+)-(\\\\d+)", "string": "123-456"}}  → ["123", "456"]
             {"$regex_groups": {"pattern": "\\\\d+", "string": "abc"}}  → []
+            {"$regex_groups": {"pattern": "(?P<u>\\\\w+)@(?P<d>\\\\w+)", "string": "user@domain", "named": true}}  → {"u": "user", "d": "domain"}
         """
         spec = node["$regex_groups"]
 
         pattern = ctx.engine.process_value(spec["pattern"], ctx)
         string = ctx.engine.process_value(spec.get("string", ""), ctx)
         flags = ctx.engine.process_value(spec.get("flags", 0), ctx)
-        return _regex_groups_compute("$regex_groups", pattern, string, flags, resolved_flags, timeout)
+        named = bool(ctx.engine.process_value(spec.get("named", False), ctx))
+        return _regex_groups_compute(
+            "$regex_groups", pattern, string, flags, resolved_flags, timeout, named)
 
     return regex_groups_handler
 
@@ -1600,3 +1772,438 @@ def raw_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
         {"$ref": "&:result", "$raw": True}
     """
     raise RawValueSignal(node["$raw"])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Collection / value constructs — pure deterministic functions over values.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def len_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$len`` construct: length of a string, list, or dict.
+
+    Schema::
+
+        {"$len": <string|list|dict>}
+
+    Examples::
+
+        {"$len": [1, 2, 3]}        → 3
+        {"$len": {"a": 1, "b": 2}} → 2
+        {"$len": "hello"}          → 5
+    """
+    return _len_compute(ctx.engine.process_value(node["$len"], ctx))
+
+
+def keys_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$keys`` construct: list of a dict's keys.
+
+    Schema::
+
+        {"$keys": <dict>}
+
+    Examples::
+
+        {"$keys": {"a": 1, "b": 2}} → ["a", "b"]
+    """
+    return _keys_compute(ctx.engine.process_value(node["$keys"], ctx))
+
+
+def values_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$values`` construct: list of a dict's values.
+
+    Schema::
+
+        {"$values": <dict>}
+
+    Examples::
+
+        {"$values": {"a": 1, "b": 2}} → [1, 2]
+    """
+    return _values_compute(ctx.engine.process_value(node["$values"], ctx))
+
+
+def items_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$items`` construct: list of ``[key, value]`` pairs from a dict.
+
+    Schema::
+
+        {"$items": <dict>}
+
+    Examples::
+
+        {"$items": {"a": 1, "b": 2}} → [["a", 1], ["b", 2]]
+    """
+    return _items_compute(ctx.engine.process_value(node["$items"], ctx))
+
+
+def reverse_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$reverse`` construct: reverse a list or string.
+
+    Schema::
+
+        {"$reverse": <list|string>}
+
+    Examples::
+
+        {"$reverse": [1, 2, 3]} → [3, 2, 1]
+        {"$reverse": "abc"}     → "cba"
+    """
+    return _reverse_compute(ctx.engine.process_value(node["$reverse"], ctx))
+
+
+def slice_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$slice`` construct: slice a list (list counterpart of ``$str_slice``).
+
+    Schema::
+
+        {"$slice": {"array": <list>, "start": <int>, "end": <int>, "step": <int>}}
+
+    Behavior:
+    * ``start`` / ``end`` / ``step`` default to ``None`` (Python slice semantics)
+    * Supports negative indices
+
+    Examples::
+
+        {"$slice": {"array": [1, 2, 3, 4, 5], "start": 1, "end": 4}} → [2, 3, 4]
+        {"$slice": {"array": [1, 2, 3, 4, 5], "step": 2}}            → [1, 3, 5]
+        {"$slice": {"array": [1, 2, 3], "start": -2}}                → [2, 3]
+    """
+    spec = node["$slice"]
+    if isinstance(spec, str):
+        raise ValueError("$slice requires a dict with 'array' and slice parameters")
+    array = ctx.engine.process_value(spec.get("array", []), ctx)
+    start = ctx.engine.process_value(spec.get("start"), ctx)
+    end = ctx.engine.process_value(spec.get("end"), ctx)
+    step = ctx.engine.process_value(spec.get("step"), ctx)
+    return _slice_compute(array, start, end, step)
+
+
+def flatten_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$flatten`` construct: flatten a nested list.
+
+    Schema::
+
+        {"$flatten": <list>}
+        {"$flatten": {"array": <list>, "depth": <int>}}
+
+    Behavior:
+    * ``depth`` (default ``1``) — how many nesting levels to unwrap.
+      A negative depth flattens completely.
+
+    Examples::
+
+        {"$flatten": [[1, 2], [3, 4]]}                        → [1, 2, 3, 4]
+        {"$flatten": {"array": [1, [2, [3]]], "depth": 1}}    → [1, 2, [3]]
+        {"$flatten": {"array": [1, [2, [3]]], "depth": -1}}   → [1, 2, 3]
+    """
+    spec = node["$flatten"]
+    if isinstance(spec, Mapping):
+        array = ctx.engine.process_value(spec.get("array", []), ctx)
+        depth = ctx.engine.process_value(spec.get("depth", 1), ctx)
+    else:
+        array = ctx.engine.process_value(spec, ctx)
+        depth = 1
+    return _flatten_compute(array, depth)
+
+
+def type_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$type`` construct: the JSON type name of a value.
+
+    Schema::
+
+        {"$type": <any>}
+
+    Returns one of ``"string"``, ``"number"``, ``"bool"``, ``"list"``,
+    ``"dict"``, ``"null"``.
+
+    Examples::
+
+        {"$type": "hi"}       → "string"
+        {"$type": 42}         → "number"
+        {"$type": true}       → "bool"
+        {"$type": [1, 2]}     → "list"
+        {"$type": {"a": 1}}   → "dict"
+        {"$type": null}       → "null"
+    """
+    return _type_compute(ctx.engine.process_value(node["$type"], ctx))
+
+
+def sum_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$sum`` construct: sum of a list of numbers.
+
+    Schema::
+
+        {"$sum": <list of numbers>}
+
+    Examples::
+
+        {"$sum": [1, 2, 3]}   → 6
+        {"$sum": []}          → 0
+    """
+    return _sum_compute(ctx.engine.process_value(node["$sum"], ctx))
+
+
+def avg_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$avg`` construct: arithmetic mean of a non-empty list of numbers.
+
+    Schema::
+
+        {"$avg": <list of numbers>}
+
+    Examples::
+
+        {"$avg": [2, 4, 6]}   → 4.0
+    """
+    return _avg_compute(ctx.engine.process_value(node["$avg"], ctx))
+
+
+def _resolve_key_fn(spec: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """Build the per-element key extractor for ``$sort`` / ``$min`` / ``$max`` /
+    ``$unique`` from an optional ``key`` pointer, or ``None`` when absent."""
+    if "key" not in spec:
+        return None
+    key_ptr = ctx.engine.process_value(spec["key"], ctx)
+    return lambda item: ctx.engine.resolver.get(key_ptr, item)
+
+
+def min_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$min`` construct: smallest element of a non-empty list.
+
+    Schema::
+
+        {"$min": <list>}
+        {"$min": {"array": <list>, "key": <pointer within element>}}
+
+    Examples::
+
+        {"$min": [3, 1, 2]}                                          → 1
+        {"$min": {"array": [{"n": 3}, {"n": 1}], "key": "/n"}}       → {"n": 1}
+    """
+    spec = node["$min"]
+    if isinstance(spec, Mapping):
+        array = ctx.engine.process_value(spec.get("array", []), ctx)
+        key_fn = _resolve_key_fn(spec, ctx)
+    else:
+        array = ctx.engine.process_value(spec, ctx)
+        key_fn = None
+    return _minmax_compute("$min", array, "min", key_fn)
+
+
+def max_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$max`` construct: largest element of a non-empty list.
+
+    Schema::
+
+        {"$max": <list>}
+        {"$max": {"array": <list>, "key": <pointer within element>}}
+
+    Examples::
+
+        {"$max": [3, 1, 2]}                                          → 3
+        {"$max": {"array": [{"n": 3}, {"n": 1}], "key": "/n"}}       → {"n": 3}
+    """
+    spec = node["$max"]
+    if isinstance(spec, Mapping):
+        array = ctx.engine.process_value(spec.get("array", []), ctx)
+        key_fn = _resolve_key_fn(spec, ctx)
+    else:
+        array = ctx.engine.process_value(spec, ctx)
+        key_fn = None
+    return _minmax_compute("$max", array, "max", key_fn)
+
+
+def sort_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$sort`` construct: sorted copy of a list.
+
+    Schema::
+
+        {"$sort": <list>}
+        {"$sort": {"array": <list>, "key": <pointer within element>, "reverse": <bool>}}
+
+    Behavior:
+    * ``key`` (optional) — pointer resolved within each element (as in ``op: distinct``)
+    * ``reverse`` (default ``false``) — descending order
+
+    Examples::
+
+        {"$sort": [3, 1, 2]}                                            → [1, 2, 3]
+        {"$sort": {"array": [3, 1, 2], "reverse": true}}               → [3, 2, 1]
+        {"$sort": {"array": [{"n": 3}, {"n": 1}], "key": "/n"}}        → [{"n": 1}, {"n": 3}]
+    """
+    spec = node["$sort"]
+    if isinstance(spec, Mapping):
+        array = ctx.engine.process_value(spec.get("array", []), ctx)
+        key_fn = _resolve_key_fn(spec, ctx)
+        reverse = bool(ctx.engine.process_value(spec.get("reverse", False), ctx))
+    else:
+        array = ctx.engine.process_value(spec, ctx)
+        key_fn = None
+        reverse = False
+    return _sort_compute(array, key_fn, reverse)
+
+
+def unique_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$unique`` construct: deduplicate a list, preserving order.
+
+    Schema::
+
+        {"$unique": <list>}
+        {"$unique": {"array": <list>, "key": <pointer within element>}}
+
+    Behavior:
+    * ``key`` (optional) — pointer resolved within each element for comparison
+    * Unhashable elements are always kept (value-level twin of ``op: distinct``)
+
+    Examples::
+
+        {"$unique": [1, 2, 2, 3, 1]}                                          → [1, 2, 3]
+        {"$unique": {"array": [{"id": 1}, {"id": 1}, {"id": 2}], "key": "/id"}} → [{"id": 1}, {"id": 2}]
+    """
+    spec = node["$unique"]
+    if isinstance(spec, Mapping):
+        array = ctx.engine.process_value(spec.get("array", []), ctx)
+        key_fn = _resolve_key_fn(spec, ctx)
+    else:
+        array = ctx.engine.process_value(spec, ctx)
+        key_fn = None
+    return _unique_compute(array, key_fn)
+
+
+def abs_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$abs`` construct: absolute value of a number.
+
+    Schema::
+
+        {"$abs": <number>}
+
+    Examples::
+
+        {"$abs": -5}    → 5
+        {"$abs": 3.2}   → 3.2
+    """
+    return _abs_compute(ctx.engine.process_value(node["$abs"], ctx))
+
+
+def floor_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$floor`` construct: largest integer ≤ the number.
+
+    Schema::
+
+        {"$floor": <number>}
+
+    Examples::
+
+        {"$floor": 3.7}   → 3
+        {"$floor": -1.2}  → -2
+    """
+    return _floor_compute(ctx.engine.process_value(node["$floor"], ctx))
+
+
+def ceil_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+    """``$ceil`` construct: smallest integer ≥ the number.
+
+    Schema::
+
+        {"$ceil": <number>}
+
+    Examples::
+
+        {"$ceil": 3.2}    → 4
+        {"$ceil": -1.8}   → -1
+    """
+    return _ceil_compute(ctx.engine.process_value(node["$ceil"], ctx))
+
+
+def make_map_handler(
+        max_items: int = 100_000,
+) -> Callable[[Mapping[str, Any], ExecutionContext], Any]:
+    """Factory for the ``$map`` handler with a size limit.
+
+    Args:
+        max_items: Maximum number of input elements allowed.
+    """
+
+    def map_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+        """``$map`` construct: apply an expression to each element of a list.
+
+        Schema::
+
+            {"$map": {"in": <list|dict>, "as": "item", "expr": <expression>}}
+
+        Behavior:
+        * ``in`` — the source list (a dict is turned into ``[key, value]`` pairs)
+        * ``as`` (default ``"item"``) — name the element is bound to
+        * ``expr`` — evaluated once per element; reference the element via
+          ``${&:/item}`` (the ``&:`` prefix reads the loop binding)
+
+        Examples::
+
+            {"$map": {"in": [1, 2, 3], "as": "n", "expr": {"$mul": ["${&:/n}", 2]}}}
+              → [2, 4, 6]
+        """
+        spec = node["$map"]
+        if isinstance(spec, str):
+            raise ValueError("$map requires a dict with 'in' and 'expr'")
+        array = ctx.engine.process_value(spec["in"], ctx)
+        var = ctx.engine.process_value(spec.get("as", "item"), ctx)
+        expr = spec["expr"]
+        items = _normalize_map_iterable("$map", array, max_items)
+        result = []
+        for elem in items:
+            sub = ctx.copy(new_temp_read_only={**ctx.temp_read_only, var: elem})
+            result.append(ctx.engine.process_value(expr, sub))
+        return result
+
+    return map_handler
+
+
+# Default map_handler for backward compatibility
+map_handler = make_map_handler()
+
+
+def make_filter_handler(
+        max_items: int = 100_000,
+) -> Callable[[Mapping[str, Any], ExecutionContext], Any]:
+    """Factory for the ``$filter`` handler with a size limit.
+
+    Args:
+        max_items: Maximum number of input elements allowed.
+    """
+
+    def filter_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
+        """``$filter`` construct: keep elements for which a condition is truthy.
+
+        Schema::
+
+            {"$filter": {"in": <list|dict>, "as": "item", "cond": <expression>}}
+
+        Behavior:
+        * ``in`` — the source list (a dict is turned into ``[key, value]`` pairs)
+        * ``as`` (default ``"item"``) — name the element is bound to
+        * ``cond`` — evaluated once per element; reference the element via
+          ``${&:/item}``. Kept when the result is truthy.
+
+        Examples::
+
+            {"$filter": {"in": [1, 2, 3, 4], "as": "n", "cond": {"$gt": ["${&:/n}", 2]}}}
+              → [3, 4]
+        """
+        spec = node["$filter"]
+        if isinstance(spec, str):
+            raise ValueError("$filter requires a dict with 'in' and 'cond'")
+        array = ctx.engine.process_value(spec["in"], ctx)
+        var = ctx.engine.process_value(spec.get("as", "item"), ctx)
+        cond = spec["cond"]
+        items = _normalize_map_iterable("$filter", array, max_items)
+        result = []
+        for elem in items:
+            sub = ctx.copy(new_temp_read_only={**ctx.temp_read_only, var: elem})
+            if ctx.engine.process_value(cond, sub):
+                result.append(elem)
+        return result
+
+    return filter_handler
+
+
+# Default filter_handler for backward compatibility
+filter_handler = make_filter_handler()

@@ -40,6 +40,13 @@ from .handlers.constructs import (
     # Regex
     regex_match_handler, regex_search_handler, regex_findall_handler,
     regex_replace_handler, regex_groups_handler,
+    # Collection / value
+    len_handler, keys_handler, values_handler, items_handler,
+    reverse_handler, slice_handler, flatten_handler, type_handler,
+    sum_handler, avg_handler, min_handler, max_handler,
+    sort_handler, unique_handler,
+    abs_handler, floor_handler, ceil_handler,
+    map_handler, filter_handler,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -89,6 +96,9 @@ MATH_HANDLERS = {
     "$pow": pow_handler,
     "$mod": mod_handler,
     "$round": round_handler,
+    "$abs": abs_handler,
+    "$floor": floor_handler,
+    "$ceil": ceil_handler,
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -123,6 +133,29 @@ REGEX_HANDLERS = {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Collection / value operations
+# ─────────────────────────────────────────────────────────────────────────────
+
+COLLECTION_HANDLERS = {
+    "$len": len_handler,
+    "$keys": keys_handler,
+    "$values": values_handler,
+    "$items": items_handler,
+    "$reverse": reverse_handler,
+    "$slice": slice_handler,
+    "$flatten": flatten_handler,
+    "$type": type_handler,
+    "$sum": sum_handler,
+    "$avg": avg_handler,
+    "$min": min_handler,
+    "$max": max_handler,
+    "$sort": sort_handler,
+    "$unique": unique_handler,
+    "$map": map_handler,
+    "$filter": filter_handler,
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Combined groups
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -134,6 +167,7 @@ ALL_HANDLERS_NO_CAST = {
     **MATH_HANDLERS,
     **STRING_HANDLERS,
     **REGEX_HANDLERS,
+    **COLLECTION_HANDLERS,
 }
 
 
@@ -181,6 +215,7 @@ def get_all_handlers_with_limits(
         str_max_split_results=100_000,
         str_max_join_result=10_000_000,
         str_max_replace_result=10_000_000,
+        map_filter_max_items=100_000,
 ):
     """Get all handlers with custom security limits.
 
@@ -198,6 +233,7 @@ def get_all_handlers_with_limits(
         str_max_split_results: Maximum number of results from $str_split.
         str_max_join_result: Maximum length of result from $str_join.
         str_max_replace_result: Maximum length of result from $str_replace.
+        map_filter_max_items: Maximum number of input elements for $map / $filter.
 
     Returns:
         Dict of all handler constructs with specified limits.
@@ -227,6 +263,8 @@ def get_all_handlers_with_limits(
         make_regex_findall_handler,
         make_regex_replace_handler,
         make_regex_groups_handler,
+        make_map_handler,
+        make_filter_handler,
     )
     from .casters import BUILTIN_CASTERS
 
@@ -255,6 +293,9 @@ def get_all_handlers_with_limits(
         ),
         "$mod": mod_handler,
         "$round": round_handler,
+        "$abs": abs_handler,
+        "$floor": floor_handler,
+        "$ceil": ceil_handler,
         # String handlers with limits
         "$str_split": make_str_split_handler(
             max_results=str_max_split_results,
@@ -295,5 +336,9 @@ def get_all_handlers_with_limits(
             timeout=regex_timeout,
             allowed_flags=regex_allowed_flags,
         ),
+        # Collection / value handlers (map/filter carry a size limit)
+        **COLLECTION_HANDLERS,
+        "$map": make_map_handler(max_items=map_filter_max_items),
+        "$filter": make_filter_handler(max_items=map_filter_max_items),
         "$cast": make_cast_handler(resolved_casters),
     }

@@ -354,7 +354,17 @@ def make_regex_findall_handler(timeout: float = 2.0, allowed_flags: int | None =
 
 
 def make_regex_groups_handler(timeout: float = 2.0, allowed_flags: int | None = None) -> AsyncSpecialFn:
-    return _make_regex("$regex_groups", _c._regex_groups_compute, timeout, allowed_flags)
+    resolved_flags = _c._resolve_allowed_flags(allowed_flags)
+
+    async def handler(node, ctx):
+        spec = node["$regex_groups"]
+        pattern = await ctx.engine.process_value_async(spec["pattern"], ctx)
+        string = await ctx.engine.process_value_async(spec.get("string", ""), ctx)
+        flags = await ctx.engine.process_value_async(spec.get("flags", 0), ctx)
+        named = bool(await ctx.engine.process_value_async(spec.get("named", False), ctx))
+        return _c._regex_groups_compute(
+            "$regex_groups", pattern, string, flags, resolved_flags, timeout, named)
+    return handler
 
 
 async def _regex_replace_handler_impl(spec, ctx, resolved_flags, timeout):
@@ -410,3 +420,167 @@ def make_cast_handler(casters: Mapping[str, Any]) -> AsyncSpecialFn:
 
 async def raw_handler(node: Mapping[str, Any], ctx: ExecutionContext) -> Any:
     raise RawValueSignal(node["$raw"])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Collection / value constructs (compute reused from the sync helpers)
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def len_handler(node, ctx):
+    return _c._len_compute(await ctx.engine.process_value_async(node["$len"], ctx))
+
+
+async def keys_handler(node, ctx):
+    return _c._keys_compute(await ctx.engine.process_value_async(node["$keys"], ctx))
+
+
+async def values_handler(node, ctx):
+    return _c._values_compute(await ctx.engine.process_value_async(node["$values"], ctx))
+
+
+async def items_handler(node, ctx):
+    return _c._items_compute(await ctx.engine.process_value_async(node["$items"], ctx))
+
+
+async def reverse_handler(node, ctx):
+    return _c._reverse_compute(await ctx.engine.process_value_async(node["$reverse"], ctx))
+
+
+async def slice_handler(node, ctx):
+    spec = node["$slice"]
+    if isinstance(spec, str):
+        raise ValueError("$slice requires a dict with 'array' and slice parameters")
+    array = await ctx.engine.process_value_async(spec.get("array", []), ctx)
+    start = await ctx.engine.process_value_async(spec.get("start"), ctx)
+    end = await ctx.engine.process_value_async(spec.get("end"), ctx)
+    step = await ctx.engine.process_value_async(spec.get("step"), ctx)
+    return _c._slice_compute(array, start, end, step)
+
+
+async def flatten_handler(node, ctx):
+    spec = node["$flatten"]
+    if isinstance(spec, Mapping):
+        array = await ctx.engine.process_value_async(spec.get("array", []), ctx)
+        depth = await ctx.engine.process_value_async(spec.get("depth", 1), ctx)
+    else:
+        array = await ctx.engine.process_value_async(spec, ctx)
+        depth = 1
+    return _c._flatten_compute(array, depth)
+
+
+async def type_handler(node, ctx):
+    return _c._type_compute(await ctx.engine.process_value_async(node["$type"], ctx))
+
+
+async def sum_handler(node, ctx):
+    return _c._sum_compute(await ctx.engine.process_value_async(node["$sum"], ctx))
+
+
+async def avg_handler(node, ctx):
+    return _c._avg_compute(await ctx.engine.process_value_async(node["$avg"], ctx))
+
+
+async def _resolve_key_fn(spec, ctx):
+    if "key" not in spec:
+        return None
+    key_ptr = await ctx.engine.process_value_async(spec["key"], ctx)
+    return lambda item: ctx.engine.resolver.get(key_ptr, item)
+
+
+async def min_handler(node, ctx):
+    spec = node["$min"]
+    if isinstance(spec, Mapping):
+        array = await ctx.engine.process_value_async(spec.get("array", []), ctx)
+        key_fn = await _resolve_key_fn(spec, ctx)
+    else:
+        array = await ctx.engine.process_value_async(spec, ctx)
+        key_fn = None
+    return _c._minmax_compute("$min", array, "min", key_fn)
+
+
+async def max_handler(node, ctx):
+    spec = node["$max"]
+    if isinstance(spec, Mapping):
+        array = await ctx.engine.process_value_async(spec.get("array", []), ctx)
+        key_fn = await _resolve_key_fn(spec, ctx)
+    else:
+        array = await ctx.engine.process_value_async(spec, ctx)
+        key_fn = None
+    return _c._minmax_compute("$max", array, "max", key_fn)
+
+
+async def sort_handler(node, ctx):
+    spec = node["$sort"]
+    if isinstance(spec, Mapping):
+        array = await ctx.engine.process_value_async(spec.get("array", []), ctx)
+        key_fn = await _resolve_key_fn(spec, ctx)
+        reverse = bool(await ctx.engine.process_value_async(spec.get("reverse", False), ctx))
+    else:
+        array = await ctx.engine.process_value_async(spec, ctx)
+        key_fn = None
+        reverse = False
+    return _c._sort_compute(array, key_fn, reverse)
+
+
+async def unique_handler(node, ctx):
+    spec = node["$unique"]
+    if isinstance(spec, Mapping):
+        array = await ctx.engine.process_value_async(spec.get("array", []), ctx)
+        key_fn = await _resolve_key_fn(spec, ctx)
+    else:
+        array = await ctx.engine.process_value_async(spec, ctx)
+        key_fn = None
+    return _c._unique_compute(array, key_fn)
+
+
+async def abs_handler(node, ctx):
+    return _c._abs_compute(await ctx.engine.process_value_async(node["$abs"], ctx))
+
+
+async def floor_handler(node, ctx):
+    return _c._floor_compute(await ctx.engine.process_value_async(node["$floor"], ctx))
+
+
+async def ceil_handler(node, ctx):
+    return _c._ceil_compute(await ctx.engine.process_value_async(node["$ceil"], ctx))
+
+
+def make_map_handler(max_items: int = 100_000) -> AsyncSpecialFn:
+    async def map_handler(node, ctx):
+        spec = node["$map"]
+        if isinstance(spec, str):
+            raise ValueError("$map requires a dict with 'in' and 'expr'")
+        array = await ctx.engine.process_value_async(spec["in"], ctx)
+        var = await ctx.engine.process_value_async(spec.get("as", "item"), ctx)
+        expr = spec["expr"]
+        items = _c._normalize_map_iterable("$map", array, max_items)
+        result = []
+        for elem in items:
+            sub = ctx.copy(new_temp_read_only={**ctx.temp_read_only, var: elem})
+            result.append(await ctx.engine.process_value_async(expr, sub))
+        return result
+    return map_handler
+
+
+map_handler = make_map_handler()
+
+
+def make_filter_handler(max_items: int = 100_000) -> AsyncSpecialFn:
+    async def filter_handler(node, ctx):
+        spec = node["$filter"]
+        if isinstance(spec, str):
+            raise ValueError("$filter requires a dict with 'in' and 'cond'")
+        array = await ctx.engine.process_value_async(spec["in"], ctx)
+        var = await ctx.engine.process_value_async(spec.get("as", "item"), ctx)
+        cond = spec["cond"]
+        items = _c._normalize_map_iterable("$filter", array, max_items)
+        result = []
+        for elem in items:
+            sub = ctx.copy(new_temp_read_only={**ctx.temp_read_only, var: elem})
+            if await ctx.engine.process_value_async(cond, sub):
+                result.append(elem)
+        return result
+    return filter_handler
+
+
+filter_handler = make_filter_handler()

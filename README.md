@@ -1239,7 +1239,7 @@ J-Perm provides comprehensive string manipulation constructs:
 
 ### 5. Regular Expressions
 
-J-Perm supports powerful regex operations using Python's `re` module:
+J-Perm supports powerful regex operations backed by the `regex` module (with an execution timeout and a configurable allow-list of flags):
 
 #### Match and Search
 
@@ -1284,11 +1284,89 @@ J-Perm supports powerful regex operations using Python's `re` module:
 {"$regex_groups": {"pattern": "(\\d+)-(\\d+)", "string": "123-456"}}  → ["123", "456"]
 ```
 
+**Named groups (`named` parameter):**
+Set `named: true` to return a `{name: value}` dict of named `(?P<name>...)` groups
+instead of a positional list (empty dict when nothing matches):
+```python
+{"$regex_groups": {
+    "pattern": "(?P<user>\\w+)@(?P<domain>\\w+)",
+    "string": "user@domain",
+    "named": true
+}}  → {"user": "user", "domain": "domain"}
+```
+
 **Optional `flags` parameter:**
 All regex constructs accept optional `flags` parameter (e.g., `re.IGNORECASE = 2`):
 ```python
 {"$regex_match": {"pattern": "^hello$", "string": "HELLO", "flags": 2}}  → true
 ```
+
+---
+
+### 5b. Collections and Numbers
+
+Pure, deterministic value-level constructs for working with lists, dicts, and
+numbers. Every parameter is resolved through the value pipeline, so any of them
+may itself be a `${...}` template, a `$ref`, or a nested construct.
+
+#### Size, keys, and values
+
+```python
+{"$len": [1, 2, 3]}             → 3      # length of a list, dict, or string
+{"$len": {"a": 1, "b": 2}}      → 2
+{"$keys": {"a": 1, "b": 2}}     → ["a", "b"]
+{"$values": {"a": 1, "b": 2}}   → [1, 2]
+{"$items": {"a": 1, "b": 2}}    → [["a", 1], ["b", 2]]
+{"$type": 42}                   → "number"   # string/number/bool/list/dict/null
+```
+
+#### Reordering and reshaping
+
+```python
+{"$reverse": [1, 2, 3]}                             → [3, 2, 1]   # list or string
+{"$slice": {"array": [1, 2, 3, 4, 5], "start": 1, "end": 4}}  → [2, 3, 4]
+{"$slice": {"array": [1, 2, 3, 4, 5], "step": 2}}             → [1, 3, 5]
+{"$flatten": [[1, 2], [3, 4]]}                      → [1, 2, 3, 4]
+{"$flatten": {"array": [1, [2, [3]]], "depth": -1}}  → [1, 2, 3]  # -1 = fully flatten
+```
+
+#### Sorting and de-duplication
+
+```python
+{"$sort": [3, 1, 2]}                                       → [1, 2, 3]
+{"$sort": {"array": [3, 1, 2], "reverse": true}}          → [3, 2, 1]
+{"$sort": {"array": [{"n": 3}, {"n": 1}], "key": "/n"}}   → [{"n": 1}, {"n": 3}]
+{"$unique": [1, 2, 2, 3, 1]}                              → [1, 2, 3]
+{"$unique": {"array": [{"id": 1}, {"id": 1}], "key": "/id"}}  → [{"id": 1}]
+```
+
+#### Numeric aggregates and scalar math
+
+```python
+{"$sum": [1, 2, 3]}     → 6
+{"$avg": [2, 4, 6]}     → 4.0
+{"$min": [3, 1, 2]}     → 1
+{"$max": {"array": [{"n": 3}, {"n": 1}], "key": "/n"}}  → {"n": 3}
+{"$abs": -5}            → 5
+{"$floor": 3.7}        → 3
+{"$ceil": 3.2}         → 4
+```
+
+#### `$map` / `$filter` — transform each element
+
+Each element is bound to a variable (default `item`) and referenced with the
+`&:` prefix. `$map` returns the evaluated expression per element; `$filter`
+keeps elements whose condition is truthy.
+
+```python
+{"$map": {"in": [1, 2, 3], "as": "n", "expr": {"$mul": ["${&:/n}", 2]}}}
+  → [2, 4, 6]
+
+{"$filter": {"in": [1, 2, 3, 4], "as": "n", "cond": {"$gt": ["${&:/n}", 2]}}}
+  → [3, 4]
+```
+
+A dict passed to `in` is iterated as `[key, value]` pairs.
 
 ---
 
@@ -1913,7 +1991,13 @@ Calls map known names to constructs; anything else becomes a `$func`:
 | `upper/lower/strip/lstrip/rstrip(...)` | `$str_*` |
 | `split/join/replace/contains/startswith/endswith/slice(...)` | `$str_*` |
 | `round(x, n, mode: "ceil")` | `{$round}` |
-| `regex_match/search/findall/groups/replace(..., flags: N)` | `$regex_*` |
+| `regex_match/search/findall/replace(..., flags: N)` | `$regex_*` |
+| `regex_groups(p, s, named: true)` | `{$regex_groups}` |
+| `len/keys/values/items/reverse/type/sum/avg/abs/floor/ceil(x)` | `$len / $keys / …` |
+| `sort/unique/min/max(arr, key: "/p", reverse: true)` | `$sort / $unique / $min / $max` |
+| `flatten(arr, depth: N)` | `{$flatten}` |
+| `lslice(arr, start, end, step)` | `{$slice}` (list slice; `slice(...)` is the string one) |
+| `map(arr, EXPR, as: "n")` / `filter(arr, COND, as: "n")` | `{$map}` / `{$filter}` |
 | `ref(/p, default: …)` | `{$ref, $default}` |
 | `raw(EXPR)` | `{$raw: EXPR}` |
 | `eval { BLOCK } select /x` | `{$eval, $select?}` |
@@ -3388,6 +3472,29 @@ from j_perm import (
     make_regex_replace_handler, # Factory with configurable limits
     regex_groups_handler,
     make_regex_groups_handler,  # Factory with configurable limits
+
+    # Collection / value operations
+    len_handler,
+    keys_handler,
+    values_handler,
+    items_handler,
+    reverse_handler,
+    slice_handler,
+    flatten_handler,
+    type_handler,
+    sum_handler,
+    avg_handler,
+    min_handler,
+    max_handler,
+    sort_handler,
+    unique_handler,
+    abs_handler,
+    floor_handler,
+    ceil_handler,
+    map_handler,
+    make_map_handler,     # Factory with configurable size limit
+    filter_handler,
+    make_filter_handler,  # Factory with configurable size limit
 
     # Function handlers
     DefMatcher,

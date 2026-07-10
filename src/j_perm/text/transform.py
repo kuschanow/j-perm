@@ -185,6 +185,13 @@ def _flatten_list(node, list_name, item_name):
 
 _STR1 = {"upper": "$str_upper", "lower": "$str_lower"}
 
+# Single-argument collection / value / math functions: name(x) → {"$name": x}
+_VAL1 = {
+    "len": "$len", "keys": "$keys", "values": "$values", "items": "$items",
+    "reverse": "$reverse", "type": "$type", "sum": "$sum", "avg": "$avg",
+    "abs": "$abs", "floor": "$floor", "ceil": "$ceil",
+}
+
 
 def _call(ch):
     if _is_term(ch[0], "raw"):           # raw '(' expr ')'
@@ -237,6 +244,8 @@ def _call(ch):
         d = {"pattern": pos[0], "string": pos[1]}
         if "flags" in nm:
             d["flags"] = nm["flags"]
+        if name == "regex_groups" and "named" in nm:
+            d["named"] = nm["named"]
         return {"$" + name: d}
     if name == "regex_replace":
         d = {"pattern": pos[0], "replacement": pos[1], "string": pos[2]}
@@ -245,6 +254,44 @@ def _call(ch):
         if "flags" in nm:
             d["flags"] = nm["flags"]
         return {"$regex_replace": d}
+    if name in _VAL1:
+        return {_VAL1[name]: pos[0]}
+    if name in ("sort", "unique", "min", "max"):
+        key = "$" + name
+        if len(pos) == 1 and not nm:
+            return {key: pos[0]}
+        d = {"array": pos[0]}
+        if "key" in nm:
+            d["key"] = nm["key"]
+        if name == "sort" and "reverse" in nm:
+            d["reverse"] = nm["reverse"]
+        return {key: d}
+    if name == "lslice":
+        d = {"array": pos[0]}
+        if len(pos) > 1:
+            d["start"] = pos[1]
+        if len(pos) > 2:
+            d["end"] = pos[2]
+        if len(pos) > 3:
+            d["step"] = pos[3]
+        return {"$slice": d}
+    if name == "flatten":
+        if len(pos) == 1 and not nm:
+            return {"$flatten": pos[0]}
+        d = {"array": pos[0]}
+        if "depth" in nm:
+            d["depth"] = nm["depth"]
+        return {"$flatten": d}
+    if name == "map":
+        d = {"in": pos[0], "expr": pos[1]}
+        if "as" in nm:
+            d["as"] = nm["as"]
+        return {"$map": d}
+    if name == "filter":
+        d = {"in": pos[0], "cond": pos[1]}
+        if "as" in nm:
+            d["as"] = nm["as"]
+        return {"$filter": d}
     if name == "ref":
         d = {"$ref": pos[0]}
         if "default" in nm:
